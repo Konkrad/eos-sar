@@ -162,23 +162,41 @@ class Sentinel1GRDMetadata:
 
 
 def relative_orbit_number_from_absolute(
-    mission_id: str, absolute_orbit_number: int
+    mission_id: str,
+    absolute_orbit_number: int,
+    acquisition_date: Optional[datetime.datetime] = None,
 ) -> int:
     if mission_id == "S1A":
         return (absolute_orbit_number - 73) % 175 + 1
     elif mission_id == "S1B":
         return (absolute_orbit_number - 27) % 175 + 1
     elif mission_id == "S1C":
-        return (absolute_orbit_number + 3) % 175 + 1
+        """
+        https://dataspace.copernicus.eu/news/2026-5-28-sentinel-1-orbital-reconfiguration-dates
+        the Sentinel-1C satellite will be manoeuvred to reach the 6-days nominal revisit
+        frequency between Sentinel-1C and Sentinel-1D ground tracks (currently 1-day).
+        During this period, to occur between 09 and 23 June, Sentinel-1C operations 
+        will be temporarily suspended and nominal operations will be ensured by the other two units,
+        Sentinel-1A and Sentinel-1D.
+        At completion of this transition on 24 June, Sentinel-1C will resume nominal operations
+        """
+        assert acquisition_date is not None, (
+            "Due to orbit manoeuver, acquisition date must be given"
+        )
+        cutoff_date = datetime.datetime(
+            2026, 6, 16, tzinfo=datetime.timezone.utc
+        )  # take a date between 9 and 23 june
+        if acquisition_date < cutoff_date:
+            return (absolute_orbit_number - 172) % 175 + 1
+        else:
+            return (absolute_orbit_number - 99) % 175 + 1
     elif mission_id == "S1D":
         return (absolute_orbit_number - 42) % 175 + 1
     raise ValueError(f"Invalid mission_id {mission_id}")
 
 
-def isostring_to_timestamp(s: str) -> float:
+def isostring_to_datetime(s: str) -> datetime.datetime:
     """Convert a string representing a date and time to a float number."""
-    # this version is about three times as fast as _old_isostring_to_timestamp
-    # 2024-03-24T07:06:22.000000
     year = int(s[0:4])
     month = int(s[5:7])
     day = int(s[8:10])
@@ -196,7 +214,14 @@ def isostring_to_timestamp(s: str) -> float:
         second=second,
         microsecond=micro,
         tzinfo=datetime.timezone.utc,
-    ).timestamp()
+    )
+
+
+def isostring_to_timestamp(s: str) -> float:
+    """Convert a string representing a date and time to a float number."""
+    # this version is about three times as fast as _old_isostring_to_timestamp
+    # 2024-03-24T07:06:22.000000
+    return isostring_to_datetime(s).timestamp()
 
 
 def corners_of_geolocation_grid_points_list(l, only_burst_id):
@@ -392,8 +417,9 @@ def extract_common_metadata(xml):
     mission_id = i["adsHeader"]["missionId"]
     absolute_orbit_number = int(i["adsHeader"]["absoluteOrbitNumber"])
 
+    acquisition_date = isostring_to_datetime(i["adsHeader"]["startTime"])
     relative_orbit_number = relative_orbit_number_from_absolute(
-        mission_id, absolute_orbit_number
+        mission_id, absolute_orbit_number, acquisition_date=acquisition_date
     )
 
     o["mission_id"] = mission_id
