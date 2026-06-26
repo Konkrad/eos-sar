@@ -1,5 +1,7 @@
 # [Unreleased](https://github.com/Kayrros/eos-sar/compare/0.43.0..HEAD)
 
+## Added
+- s1:metadata: Add S1C relative orbit formulas pre/post manoeuver
 
 # [0.43.0](https://github.com/Kayrros/eos-sar/compare/0.42.1..0.43.0)
 
