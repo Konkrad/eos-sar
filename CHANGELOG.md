@@ -1,7 +1,12 @@
-# [Unreleased](https://github.com/Kayrros/eos-sar/compare/0.43.0..HEAD)
+# [Unreleased](https://github.com/Kayrros/eos-sar/compare/0.43.1..HEAD)
+
+# [0.43.1](https://github.com/Kayrros/eos-sar/compare/0.43.0..0.43.1)
 
 ## Added
 - s1:metadata: Add S1C relative orbit formulas pre/post manoeuver
+  * You should update to 0.43.1 if you use S1C products acquired after 2026-06-16.
+  * `eos.products.sentinel1.metadata.relative_orbit_number_from_absolute` signature changed (new parameter `acquisition_date`), update your code if you use this function on recent products.
+  * See https://dataspace.copernicus.eu/news/2026-5-28-sentinel-1-orbital-reconfiguration-dates for more information about the manoeuver.
 
 # [0.43.0](https://github.com/Kayrros/eos-sar/compare/0.42.1..0.43.0)
 
