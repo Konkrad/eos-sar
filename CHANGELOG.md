@@ -1,5 +1,12 @@
 # [Unreleased](https://github.com/Kayrros/eos-sar/compare/0.43.1..HEAD)
 
+## Added
+- s1 metadata:
+  * add attribute `azimuth_pixel_spacing` to `Sentinel1BurstMetadata` and `Sentinel1GRDMetadata`
+      * Warning: if missing from the dict provided to `from_dict`, the function will fail. Make sure to update potential caches and static metadata files when updating to eos-sar 0.44.0.
+   * add properties `radar_frequency`, `range_pixel_spacing`, `azimuth_time_interval` to `Sentinel1BurstMetadata`
+   * add properties `radar_frequency` to `Sentinel1GRDMetadata`
+
 # [0.43.1](https://github.com/Kayrros/eos-sar/compare/0.43.0..0.43.1)
 
 ## Added

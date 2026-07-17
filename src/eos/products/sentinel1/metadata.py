@@ -64,10 +64,23 @@ class Sentinel1BurstMetadata:
     burst_times: tuple[float, float, float]
     burst_roi: tuple[int, int, int, int]
     azimuth_anx_time: float
+    azimuth_pixel_spacing: float
     burst_sensing_time: float
     approx_geom: list[tuple[float, float]]
     approx_altitude: list[float]
     bsid: str
+
+    @property
+    def radar_frequency(self) -> float:
+        return const.LIGHT_SPEED_M_PER_SEC / self.wave_length
+
+    @property
+    def range_pixel_spacing(self) -> float:
+        return const.LIGHT_SPEED_M_PER_SEC / (2 * self.range_frequency)
+
+    @property
+    def azimuth_time_interval(self) -> float:
+        return 1 / self.azimuth_frequency
 
     def with_new_state_vectors(
         self, state_vectors: list[StateVector], state_vectors_origin: str
@@ -95,6 +108,11 @@ class Sentinel1BurstMetadata:
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> Sentinel1BurstMetadata:
+        if "azimuth_pixel_spacing" not in d:
+            raise KeyError(
+                "Missing key `azimuth_pixel_spacing` from provided dict, maybe it comes from eos-sar<0.44.0?"
+            )
+
         d = d.copy()
         d["state_vectors"] = [StateVector.from_dict(s) for s in d["state_vectors"]]
         return Sentinel1BurstMetadata(**d)
@@ -123,10 +141,15 @@ class Sentinel1GRDMetadata:
     image_start: float
     image_end: float
     azimuth_time_interval: float
+    azimuth_pixel_spacing: float
     range_pixel_spacing: float
     srgr: Sentinel1GRDSRGRMetadata
     width: int
     height: int
+
+    @property
+    def radar_frequency(self) -> float:
+        return const.LIGHT_SPEED_M_PER_SEC / self.wave_length
 
     def with_new_state_vectors(
         self, state_vectors: list[StateVector], state_vectors_origin: str
@@ -155,6 +178,11 @@ class Sentinel1GRDMetadata:
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> Sentinel1GRDMetadata:
+        if "azimuth_pixel_spacing" not in d:
+            raise KeyError(
+                "Missing key `azimuth_pixel_spacing` from provided dict, maybe it comes from eos-sar<0.44.0?"
+            )
+
         d = d.copy()
         d["state_vectors"] = [StateVector.from_dict(s) for s in d["state_vectors"]]
         d["srgr"] = Sentinel1GRDSRGRMetadata.from_dict(d["srgr"])
@@ -432,6 +460,7 @@ def extract_common_metadata(xml):
     o["anx_time"] = isostring_to_timestamp(d["ascendingNodeTime"])
     o["slice_number"] = int(d["sliceNumber"])
     o["slice_count"] = int(d["sliceList"]["@count"])
+    o["azimuth_pixel_spacing"] = float(d["azimuthPixelSpacing"])
 
     d = i["swathTiming"]
     o["lines_per_burst"] = int(d["linesPerBurst"])
