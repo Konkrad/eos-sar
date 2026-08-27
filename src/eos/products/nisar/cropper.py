@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class NisarCrop:
+    """A cropped (and, for secondary images, resampled/coregistered) NISAR RSLC image."""
+
     product_id: str
     frequency: Frequency
     polarization: Polarization
@@ -49,6 +51,7 @@ class NisarCrop:
 
     @property
     def amplitude(self) -> NDArray[np.float32]:
+        """Amplitude of `array` (see `get_amplitude`)."""
         return get_amplitude(self.array)
 
 
@@ -78,6 +81,43 @@ def get_primary_crop(
     use_apd: bool = True,
     calibration: Optional[Calibration] = None,
 ) -> NisarCrop:
+    """Read and crop the primary (reference) NISAR RSLC image.
+
+    Parameters
+    ----------
+    primary_h5py_file : h5py.File
+        Opened primary NISAR RSLC HDF5 product.
+    frequency : {"A", "B"}
+        Frequency band to read.
+    polarization : Polarization
+        Polarization channel to read.
+    roi_provider : RoiProvider
+        Provider used to determine the region of interest to crop, in the
+        primary image's frame.
+    dem_source : DEMSource
+        DEM source passed to `roi_provider`.
+    get_complex : bool, optional
+        Whether to read the data as complex. Defaults to True.
+    use_apd : bool, optional
+        If True (default), apply an atmospheric path delay correction to
+        the sensor model.
+    calibration : {"beta", "sigma", "gamma"}, optional
+        Radiometric calibration to apply. Not yet implemented; must be
+        None.
+
+    Returns
+    -------
+    NisarCrop
+        Crop of the primary image, with an identity `resampling_matrix`.
+
+    Raises
+    ------
+    DatasetNotFoundError
+        If the requested frequency/polarization dataset is not present in
+        the product.
+    NotImplementedError
+        If `calibration` is not None.
+    """
     primary_metadata = NisarRSLCMetadata.parse_metadata(primary_h5py_file)
     primary_product_id = primary_metadata.product_id
     logger.info(f"Processing {primary_product_id}")
@@ -148,6 +188,26 @@ def get_primary_registLUT(
     dem: DEM,
     dem_sampling_ratio: float = 0.3,
 ) -> RegistrationLUT:
+    """Sample DEM points over `primary_roi` and their row/col projection in the primary image.
+
+    Parameters
+    ----------
+    primary_model : NisarModel
+        Sensor model of the primary image.
+    primary_roi : Roi
+        Region of interest of the primary image.
+    dem : DEM
+        DEM covering `primary_roi`.
+    dem_sampling_ratio : float, optional
+        Fraction of DEM points to sample, passed to
+        `get_registration_dem_pts`. Defaults to 0.3.
+
+    Returns
+    -------
+    RegistrationLUT
+        Sampled DEM points with their row/col projection in the primary
+        image, to be used for registering secondary images.
+    """
     x_sampled, y_sampled, raster_sampled, crs = get_registration_dem_pts(
         primary_model, primary_roi, sampling_ratio=dem_sampling_ratio, dem=dem
     )
@@ -171,6 +231,44 @@ def get_primary_crop_dem_registLUT(
     use_apd: bool = True,
     calibration: Optional[Calibration] = None,
 ) -> tuple[NisarCrop, DEM, RegistrationLUT]:
+    """Crop the primary image, fetch its DEM, and build its registration LUT.
+
+    Combines `get_primary_crop`, `NisarModel.fetch_dem`, and
+    `get_primary_registLUT`.
+
+    Parameters
+    ----------
+    primary_h5py_file : h5py.File
+        Opened primary NISAR RSLC HDF5 product.
+    frequency : {"A", "B"}
+        Frequency band to read.
+    polarization : Polarization
+        Polarization channel to read.
+    roi_provider : RoiProvider
+        Provider used to determine the region of interest to crop.
+    dem_source : DEMSource
+        DEM source used both by `roi_provider` and to fetch the DEM
+        covering the cropped region.
+    dem_sampling_ratio : float, optional
+        Fraction of DEM points to sample for registration. Defaults to 0.3.
+    get_complex : bool, optional
+        Whether to read the data as complex. Defaults to True.
+    use_apd : bool, optional
+        If True (default), apply an atmospheric path delay correction to
+        the sensor model.
+    calibration : {"beta", "sigma", "gamma"}, optional
+        Radiometric calibration to apply. Not yet implemented; must be
+        None.
+
+    Returns
+    -------
+    primary_crop : NisarCrop
+        Crop of the primary image.
+    dem : DEM
+        DEM covering the primary crop.
+    primary_registration_LUT : RegistrationLUT
+        Registration lookup table for aligning secondary images.
+    """
     primary_crop = get_primary_crop(
         primary_h5py_file,
         frequency,
@@ -203,6 +301,58 @@ def get_secondary_crop(
     use_apd: bool = True,
     calibration: Optional[Calibration] = None,
 ) -> NisarCrop:
+    """Read, register, and resample a secondary NISAR RSLC image onto the primary's ROI.
+
+    Registration is first estimated orbitally (from the DEM points/rows/cols
+    in `primary_registration_LUT`), then the secondary image is warped onto
+    the primary's grid.
+
+    Note: proper complex data resampling (Doppler centroid estimation and
+    deramping) is not fully implemented; when `get_complex` is True a
+    warning is logged and the result may be imprecise if the Doppler
+    centroid is large.
+
+    Parameters
+    ----------
+    secondary_h5py_file : h5py.File
+        Opened secondary NISAR RSLC HDF5 product.
+    frequency : {"A", "B"}
+        Frequency band to read.
+    polarization : Polarization
+        Polarization channel to read.
+    primary_roi : Roi
+        Region of interest of the primary image, i.e. the target grid onto
+        which the secondary is resampled.
+    primary_registration_LUT : RegistrationLUT
+        DEM points and their row/col projection in the primary image, from
+        `get_primary_registLUT`.
+    primary_array_amp : NDArray[np.float32], optional
+        Amplitude of the primary image array, used to refine the
+        registration with phase correlation. If None (default), only the
+        orbital registration is used.
+    get_complex : bool, optional
+        Whether to read the data as complex. Defaults to True.
+    use_apd : bool, optional
+        If True (default), apply an atmospheric path delay correction to
+        the secondary sensor model.
+    calibration : {"beta", "sigma", "gamma"}, optional
+        Radiometric calibration to apply. Not yet implemented; must be
+        None.
+
+    Returns
+    -------
+    NisarCrop
+        Secondary image resampled onto `primary_roi`, with its
+        `resampling_matrix` and estimated `translation`.
+
+    Raises
+    ------
+    DatasetNotFoundError
+        If the requested frequency/polarization dataset is not present in
+        the product.
+    NotImplementedError
+        If `calibration` is not None.
+    """
     secondary_metadata = NisarRSLCMetadata.parse_metadata(secondary_h5py_file)
     secondary_product_id = secondary_metadata.product_id
     logger.info(f"Processing {secondary_product_id}")

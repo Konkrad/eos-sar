@@ -18,16 +18,31 @@ def fig2img(fig, **kwargs):
 
 
 class Bounds:
+    """A fixed `(min, max)` value range, used to normalize an array for display."""
+
     def __init__(self, minval, maxval):
         self.minval = minval
         self.maxval = maxval
 
     def get_bounds(self):
+        """Return the `(minval, maxval)` bounds."""
         return self.minval, self.maxval
 
 
 class PercentileBounds(Bounds):
+    """`Bounds` computed from the low/high percentiles of an array's values."""
+
     def __init__(self, array, percentile=5):
+        """
+        Parameters
+        ----------
+        array : ndarray
+            Array to compute percentiles from (nans are ignored).
+        percentile : float, optional
+            Percentile used for the lower bound; the upper bound uses
+            `100 - percentile`. Must be in `[0, 50]`; out-of-range values
+            fall back to 5 (with a warning printed). Defaults to 5.
+        """
         if percentile < 0:
             print("Warning: Negative percentile given, defaulting to 5")
             percentile = 5
@@ -40,6 +55,21 @@ class PercentileBounds(Bounds):
 
 
 def to_uint8(array, bounds_provider):
+    """
+    Linearly rescale `array` to uint8 `[0, 255]`, clipping to `bounds_provider`'s bounds.
+
+    Parameters
+    ----------
+    array : ndarray
+        Array to rescale.
+    bounds_provider : Bounds
+        Provides the `(minval, maxval)` range mapped to `[0, 255]`.
+
+    Returns
+    -------
+    ndarray of uint8
+        Rescaled and clipped array, same shape as `array`.
+    """
     minval, maxval = bounds_provider.get_bounds()
     # linear function to map minval to 0 and maxval to 255
     normalized = (array - minval) / (maxval - minval) * 255
@@ -50,6 +80,19 @@ def to_uint8(array, bounds_provider):
 
 
 def phase_to_jet(image):
+    """
+    Colorize a wrapped phase array (`[-pi, pi]`) with the "jet" colormap.
+
+    Parameters
+    ----------
+    image : ndarray
+        Phase array, values expected in `[-pi, pi]`.
+
+    Returns
+    -------
+    ndarray of uint8
+        RGB image, shape `image.shape + (3,)`.
+    """
     # Get the color map by name:
     cm = plt.get_cmap("jet")
 
@@ -62,10 +105,12 @@ def phase_to_jet(image):
 
 
 def sar_amp_to_pretty_uint8(amp, p=5):
+    """Rescale a SAR amplitude array to uint8 using `p`/`100-p` percentile bounds (see `PercentileBounds`)."""
     return to_uint8(amp, PercentileBounds(amp, p))
 
 
 def save_imgs_as_gif(gif_path, images, duration=0.1):
+    """Save a sequence of `images` as an animated GIF at `gif_path`."""
     imageio.mimsave(gif_path, images, duration=duration)
 
 
@@ -78,6 +123,26 @@ def plot_phi(
     fig_out_path=None,
     **save_fig_kwargs,
 ):
+    """
+    Display (and optionally save) a wrapped phase image with a colorbar.
+
+    Parameters
+    ----------
+    phi : ndarray
+        Wrapped phase array, displayed with `vmin=-pi`, `vmax=pi`.
+    cmap : str, optional
+        Matplotlib colormap name. Defaults to "jet".
+    title : str, optional
+        Figure title.
+    figsize : tuple, optional
+        Figure size passed to `plt.subplots`.
+    remove_ticks : bool, optional
+        If True (default), hide the axis ticks.
+    fig_out_path : str, optional
+        If given, also save the figure to this path.
+    **save_fig_kwargs
+        Extra keyword arguments passed to `fig.savefig`.
+    """
     fig, ax = plt.subplots(figsize=figsize)
 
     im = ax.imshow(phi, cmap=cmap, interpolation="nearest", vmin=-np.pi, vmax=np.pi)
@@ -111,6 +176,26 @@ def plot_amp(
     fig_out_path=None,
     **save_fig_kwargs,
 ):
+    """
+    Display (and optionally save) a SAR amplitude image with a colorbar.
+
+    Parameters
+    ----------
+    amp : ndarray
+        Amplitude array, displayed in grayscale.
+    vmin, vmax : float
+        Display bounds for `amp`.
+    title : str, optional
+        Figure title.
+    figsize : tuple, optional
+        Figure size passed to `plt.subplots`.
+    remove_ticks : bool, optional
+        If True (default), hide the axis ticks.
+    fig_out_path : str, optional
+        If given, also save the figure to this path.
+    **save_fig_kwargs
+        Extra keyword arguments passed to `fig.savefig`.
+    """
     fig, ax = plt.subplots(figsize=figsize)
     im = ax.imshow(amp, cmap="gray", vmin=vmin, vmax=vmax)
 
@@ -145,6 +230,30 @@ def plot_amp_phi(
     fig_out_path=None,
     **save_fig_kwargs,
 ):
+    """
+    Display (and optionally save) amplitude and wrapped phase side by side.
+
+    Parameters
+    ----------
+    amp : ndarray
+        Amplitude array, displayed in grayscale.
+    vmin, vmax : float
+        Display bounds for `amp`.
+    phi : ndarray
+        Wrapped phase array, displayed with `vmin=-pi`, `vmax=pi`.
+    phi_cmap : str, optional
+        Matplotlib colormap name for `phi`. Defaults to "jet".
+    title : str, optional
+        Figure title.
+    figsize : tuple, optional
+        Figure size passed to `plt.subplots`.
+    remove_ticks : bool, optional
+        If True (default), hide the axis ticks.
+    fig_out_path : str, optional
+        If given, also save the figure to this path.
+    **save_fig_kwargs
+        Extra keyword arguments passed to `fig.savefig`.
+    """
     fig, axs = plt.subplots(1, 2, figsize=figsize)
 
     im_amp = axs[0].imshow(amp, cmap="gray", vmin=vmin, vmax=vmax)
@@ -176,6 +285,24 @@ def plot_amp_phi(
 
 
 def cmpx_interf_to_rgb(amp, vmin, vmax, phi):
+    """
+    Encode a complex interferogram as an HSV-based RGB image (hue=phase, value=amplitude).
+
+    Parameters
+    ----------
+    amp : ndarray
+        Amplitude array, clipped to `[vmin, vmax]` and mapped to the HSV
+        "value" channel.
+    vmin, vmax : float
+        Display bounds for `amp`.
+    phi : ndarray
+        Wrapped phase array (`[-pi, pi]`), mapped to the HSV "hue" channel.
+
+    Returns
+    -------
+    ndarray
+        RGB image in `[0, 1]`, shape `amp.shape + (3,)`.
+    """
     # use angle to determine hue, normalized from 0-1
     min_phi = -np.pi
     max_phi = np.pi
@@ -206,6 +333,30 @@ def plot_cmpx_interf_rgb(
     fig_out_path=None,
     **save_fig_kwargs,
 ):
+    """
+    Display (and optionally save) a complex interferogram as an HSV-encoded RGB image.
+
+    Combines `cmpx_interf_to_rgb` with a phase colorbar (hue).
+
+    Parameters
+    ----------
+    amp : ndarray
+        Amplitude array, mapped to the HSV "value" channel.
+    vmin, vmax : float
+        Display bounds for `amp`.
+    phi : ndarray
+        Wrapped phase array (`[-pi, pi]`), mapped to the HSV "hue" channel.
+    title : str, optional
+        Figure title.
+    figsize : tuple, optional
+        Figure size passed to `plt.subplots`.
+    remove_ticks : bool, optional
+        If True (default), hide the axis ticks.
+    fig_out_path : str, optional
+        If given, also save the figure to this path.
+    **save_fig_kwargs
+        Extra keyword arguments passed to `fig.savefig`.
+    """
     c = cmpx_interf_to_rgb(amp, vmin, vmax, phi)
 
     fig, ax = plt.subplots(figsize=figsize)

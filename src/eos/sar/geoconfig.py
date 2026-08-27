@@ -221,6 +221,32 @@ def get_geom_config_from_grid_coords(
     rows: CoordArrayLike,
     cols: CoordArrayLike,
 ) -> tuple[Arrayf64, Arrayf64, Arrayf64]:
+    """Get the geometric configuration (incidence, baselines) at given (row, col) points.
+
+    Points are localized on the ellipsoid (0 altitude) from the primary
+    model, then the incidence angle w.r.t. the primary orbit and the
+    parallel/perpendicular baselines w.r.t. each secondary orbit are computed.
+
+    Parameters
+    ----------
+    primary_model : eos.sar.model.SensorModel
+        Primary model w.r.t. which quantities are computed.
+    secondary_models : List of eos.sar.model.SensorModel
+        Secondary models list.
+    rows : ndarray
+        Row coordinates in the primary image.
+    cols : ndarray
+        Column coordinates in the primary image.
+
+    Returns
+    -------
+    theta_inc : ndarray (N, )
+        Incidence angle.
+    perp_baseline : ndarray (n_sec, N)
+        Perpendicular baseline.
+    delta_r : ndarray (n_sec, N)
+        Parallel baseline.
+    """
     rows = np.atleast_1d(rows)
     cols = np.atleast_1d(cols)
 
@@ -506,6 +532,8 @@ def get_los_squinted(
 
 @dataclass(frozen=True)
 class LOSPredictor:
+    """Predicts the Line Of Sight vector at any (row, col) position, from a 2D polynomial fitted on a sparse grid."""
+
     polynom: poly.polymodel
 
     @staticmethod
@@ -519,6 +547,32 @@ class LOSPredictor:
         normalized: bool = True,
         estimate_in_enu: bool = False,
     ) -> LOSPredictor:
+        """
+        Build a LOSPredictor by fitting a polynomial on a regular grid of the sensor model's image.
+
+        Parameters
+        ----------
+        proj_model : eos.sar.model.SensorModel
+            Sensor model used to localize the grid points and evaluate the LOS.
+        grid_size_col : int
+            Number of points in the width direction.
+        grid_size_row : int
+            Number of points in the height direction.
+        degree : int, optional
+            Degree of the 2D polynomial fitted to the LOS components. The default is 7.
+        alt : float, optional
+            Altitude of the ellipsoid on which grid points are localized. The default is 0.0.
+        normalized : bool, optional
+            If True, the fitted LOS vectors are unit vectors. The default is True.
+        estimate_in_enu : bool, optional
+            If True, the LOS is expressed in the local East-North-Up frame
+            instead of ECEF before fitting. The default is False.
+
+        Returns
+        -------
+        LOSPredictor
+            Predictor fitted on the grid.
+        """
         col_grid, row_grid = get_grid(
             proj_model.w,
             proj_model.h,
@@ -550,6 +604,32 @@ class LOSPredictor:
         normalized: bool = True,
         estimate_in_enu: bool = False,
     ) -> LOSPredictor:
+        """
+        Build a LOSPredictor by fitting a polynomial on explicit (row, col) grid coordinates.
+
+        Parameters
+        ----------
+        proj_model : eos.sar.model.SensorModel
+            Sensor model used to localize the grid points and evaluate the LOS.
+        rows_grid : ndarray
+            Row coordinates of the fitting grid points.
+        cols_grid : ndarray
+            Column coordinates of the fitting grid points.
+        degree : int, optional
+            Degree of the 2D polynomial fitted to the LOS components. The default is 7.
+        alt : float, optional
+            Altitude of the ellipsoid on which grid points are localized. The default is 0.0.
+        normalized : bool, optional
+            If True, the fitted LOS vectors are unit vectors. The default is True.
+        estimate_in_enu : bool, optional
+            If True, the LOS is expressed in the local East-North-Up frame
+            instead of ECEF before fitting. The default is False.
+
+        Returns
+        -------
+        LOSPredictor
+            Predictor fitted on the grid.
+        """
         # should not consume a lot of memory if grid size is reasonable
         los, points_3D = get_los_on_ellipsoid(
             proj_model, rows_grid, cols_grid, alt=alt, normalized=normalized
@@ -566,6 +646,25 @@ class LOSPredictor:
         cols_grid: CoordArrayLike,
         degree: int = 7,
     ) -> LOSPredictor:
+        """
+        Build a LOSPredictor by fitting a polynomial on precomputed LOS vectors at grid coordinates.
+
+        Parameters
+        ----------
+        los : ndarray (N, 3)
+            LOS vectors at the grid points.
+        rows_grid : ndarray (N,)
+            Row coordinates of the fitting grid points.
+        cols_grid : ndarray (N,)
+            Column coordinates of the fitting grid points.
+        degree : int, optional
+            Degree of the 2D polynomial fitted to the LOS components. The default is 7.
+
+        Returns
+        -------
+        LOSPredictor
+            Predictor fitted on the grid.
+        """
         polynom = poly.polymodel(degree)
         # fit polynom
         polynom.fit_poly(cols_grid, rows_grid, los)

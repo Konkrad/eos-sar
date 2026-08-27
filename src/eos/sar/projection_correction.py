@@ -172,6 +172,8 @@ class ImagePoints:
 class GeoImagePoints(
     ImagePoints, GeoPoints
 ):  # order kind of matter for the constructor
+    """Points carrying both geocentric (x, y, z) and image (azimuth time, range) coordinates."""
+
     def __post_init__(self):
         _all_len_eq([self.azt, self.rng, self.gx, self.gy, self.gz])
 
@@ -279,8 +281,23 @@ class ImageCorrection:
 
 
 class GeoCorrectionEstimator(abc.ABC):
+    """Abstract base class for estimators of a GeoCorrection from a set of GeoImagePoints."""
+
     @abc.abstractmethod
-    def estimate(self, pt: GeoImagePoints) -> GeoCorrection: ...
+    def estimate(self, pt: GeoImagePoints) -> GeoCorrection:
+        """
+        Estimate the corrections dgx, dgy, dgz.
+
+        Parameters
+        ----------
+        pt : GeoImagePoints
+            GeoImagePoints on which to compute the corrections.
+
+        Returns
+        -------
+        GeoCorrection
+            The estimated correction to be applied on the points.
+        """
 
 
 class ImageCorrectionEstimator(abc.ABC):
@@ -407,6 +424,22 @@ class SLCPxShiftCorrection(RngAztShift):
         col_shift: float,
         row_shift: float,
     ):
+        """
+        Build an image-coordinate shift correction from a pixel shift in an SLC image.
+
+        Parameters
+        ----------
+        azimuth_frequency : float
+            Pulse Repetition Frequency (Hz), used to convert `row_shift` to a
+            time shift.
+        range_frequency : float
+            Range sampling frequency (Hz), used to convert `col_shift` to a
+            slant range shift.
+        col_shift : float
+            Shift in columns (pixels).
+        row_shift : float
+            Shift in rows (pixels).
+        """
         azt_shift = row_shift / azimuth_frequency
         rng_shift = col_shift / range_frequency * const.LIGHT_SPEED_M_PER_SEC / 2
         super().__init__(rng_shift, azt_shift)

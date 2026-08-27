@@ -17,6 +17,28 @@ def normalize(
     shadow_threshold: float = 0.05,
     shadow_value: Optional[float] = 0.0,
 ) -> NDArray[Any]:
+    """Radiometrically terrain-correct a raster by a simulated backscatter image.
+
+    Parameters
+    ----------
+    raster : ndarray
+        Raster to normalize (e.g. amplitude/intensity image).
+    simulation : ndarray
+        Simulated backscatter raster, co-registered with `raster`, used as the
+        normalization reference.
+    shadow_threshold : float, optional
+        Simulated values below this threshold are considered layover/shadow.
+        The default is 0.05.
+    shadow_value : float, optional
+        Value assigned to pixels flagged as shadow (below `shadow_threshold`).
+        If None, shadow pixels are left as normalized (possibly very large)
+        values. The default is 0.0.
+
+    Returns
+    -------
+    ndarray
+        The radiometrically terrain-corrected raster.
+    """
     normalized = np.sqrt(np.abs(raster) ** 2 / (simulation + 1e-30))
 
     if shadow_value is not None:
@@ -45,11 +67,25 @@ class RadiometricTerrainCorrector:
         self._simulation = None
 
     def apply(self, raster: np.ndarray):
+        """Apply radiometric terrain correction to a raster.
+
+        Parameters
+        ----------
+        raster : ndarray
+            Raster to correct, matching the shape of the simulated
+            backscatter image over `self.roi`.
+
+        Returns
+        -------
+        ndarray
+            The radiometrically terrain-corrected raster.
+        """
         sim = self.get_simulation()
         assert raster.shape == sim.shape
         return normalize(raster, sim)
 
     def get_simulation(self) -> NDArray[np.float32]:
+        """Return the simulated backscatter raster over `self.roi`, computing and caching it on first call."""
         if self._simulation is None:
             self._simulation = self.simulator.simulate(self.roi).astype(np.float32)
         assert self._simulation is not None

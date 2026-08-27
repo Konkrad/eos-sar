@@ -1,3 +1,5 @@
+"""Metadata parsing, geometry, and cropping helpers for Capella SAR products."""
+
 from eos.products.capella import doppler_info as doppler_info
 from eos.products.capella import metadata as metadata
 from eos.products.capella import polynomial as polynomial

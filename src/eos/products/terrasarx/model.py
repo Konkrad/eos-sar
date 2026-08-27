@@ -18,6 +18,13 @@ from eos.sar.projection_correction import Corrector
 
 @dataclass(frozen=True)
 class TSXModel(SensorModel):
+    """SensorModel implementation for TerraSAR-X (TSX-1/TDX-1/PAZ-1) products.
+
+    Wraps a :class:`~eos.sar.model_helper.GenericSensorModelHelper` built from
+    the product's orbit and timing to implement the projection/localization
+    interface defined by :class:`~eos.sar.model.SensorModel`.
+    """
+
     generic_model: GenericSensorModelHelper
     # for SensorModel:
     w: int
@@ -29,6 +36,23 @@ class TSXModel(SensorModel):
     def from_metadata(
         meta: TSXMetadata, orbit: Orbit, corrector: Corrector = Corrector()
     ) -> TSXModel:
+        """Build a `TSXModel` from parsed product metadata and an orbit.
+
+        Parameters
+        ----------
+        meta : TSXMetadata
+            Metadata parsed with `parse_tsx_metadata`.
+        orbit : Orbit
+            Orbit to use for the sensor model.
+        corrector : Corrector, optional
+            Coordinate corrector applied by the underlying generic sensor
+            model. Defaults to an identity `Corrector`.
+
+        Returns
+        -------
+        TSXModel
+            Sensor model ready for projection/localization.
+        """
         coordinate = coordinates.SLCCoordinate(
             first_row_time=meta.image_start,
             first_col_time=meta.slant_range_time,
@@ -62,10 +86,18 @@ class TSXModel(SensorModel):
 
     @override
     def to_azt_rng(self, row: ArrayLike, col: ArrayLike) -> tuple[Arrayf64, Arrayf64]:
+        """Convert row/col image coordinates to azimuth time/range.
+
+        Delegates to the underlying `GenericSensorModelHelper`.
+        """
         return self.generic_model.to_azt_rng(row, col)
 
     @override
     def to_row_col(self, azt: ArrayLike, rng: ArrayLike) -> tuple[Arrayf64, Arrayf64]:
+        """Convert azimuth time/range to row/col image coordinates.
+
+        Delegates to the underlying `GenericSensorModelHelper`.
+        """
         return self.generic_model.to_row_col(azt, rng)
 
     @override
@@ -79,6 +111,11 @@ class TSXModel(SensorModel):
         azt_init: Optional[ArrayLike] = None,
         as_azt_rng: bool = False,
     ) -> tuple[CoordArrayLike, CoordArrayLike, CoordArrayLike]:
+        """Project a 3D point into image coordinates.
+
+        See `eos.sar.model.SensorModel.projection`. Delegates to the
+        underlying `GenericSensorModelHelper`.
+        """
         return self.generic_model.projection(
             x, y, alt, crs, vert_crs, azt_init, as_azt_rng
         )
@@ -95,6 +132,11 @@ class TSXModel(SensorModel):
         y_init: Optional[ArrayLike] = None,
         z_init: Optional[ArrayLike] = None,
     ) -> tuple[CoordArrayLike, CoordArrayLike, CoordArrayLike]:
+        """Localize a point in the image at a certain altitude.
+
+        See `eos.sar.model.SensorModel.localization`. Delegates to the
+        underlying `GenericSensorModelHelper`.
+        """
         return self.generic_model.localization(
             row, col, alt, crs, vert_crs, x_init, y_init, z_init
         )

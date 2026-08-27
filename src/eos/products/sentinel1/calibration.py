@@ -1,3 +1,5 @@
+"""Radiometric calibration and thermal noise removal for Sentinel-1 products."""
+
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence, Union
 
@@ -12,7 +14,7 @@ from . import _calibration as _cal  # type: ignore
 
 
 class CalibrationError(Exception):
-    pass
+    """Raised when a calibration or noise XML file has an unexpected format."""
 
 
 class _AzimuthNoise:
@@ -239,6 +241,18 @@ class Sentinel1Calibrator:
         noise_xml_content: Optional[str] = None,
         ipf: Optional[str] = None,
     ):
+        """
+        Parameters
+        ----------
+        calibration_xml_content : str
+            Content of the product's calibration annotation xml file.
+        noise_xml_content : str, optional
+            Content of the product's noise annotation xml file. If not given,
+            noise removal is disabled (`has_noise` is set to False).
+        ipf : str, optional
+            IPF version of the product (e.g. "002.90"), used to decide whether
+            a legacy noise scaling factor must be applied. The default is None.
+        """
         self._load_calibration(calibration_xml_content)
         self._ipf = ipf
         if noise_xml_content:

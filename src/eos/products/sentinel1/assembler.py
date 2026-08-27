@@ -1,3 +1,12 @@
+"""High-level assembly of Sentinel-1 SLC/GRD products into mosaics for coregistration.
+
+`Sentinel1Assembler` combines the bursts of one or more SLC products
+(covering a single acquisition/datatake) into a single debursted mosaic
+frame, and `Sentinel1AssemblyCropper` uses it to coregister and crop a
+secondary acquisition onto that primary mosaic. `Sentinel1GRDAssembler` does
+the analogous job for GRD products.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Callable, Iterable, Optional, Sequence
@@ -64,6 +73,15 @@ def _swath_from_bsid(bsid: str) -> str:
 
 
 class Sentinel1Assembler:
+    """Assemble the bursts of one or more Sentinel-1 SLC products into a mosaic.
+
+    Wraps the per-burst metadata of an acquisition (possibly spanning
+    several IW1/IW2/IW3 products of the same datatake) together with a
+    fitted `Orbit`, and provides helpers to build sensor models (burst,
+    swath, mosaic), Doppler/coordinate-correction objects, and image readers
+    for those bursts.
+    """
+
     meta_per_bsid_per_swath: dict[str, dict[str, Sentinel1BurstMetadata]] = {}
     product_id_per_bsid: dict[str, str] = {}
     bsids: set[str] = set()
@@ -93,6 +111,28 @@ class Sentinel1Assembler:
         *,
         swaths: Sequence[str] = ["iw1", "iw2", "iw3"],
     ) -> Sentinel1Assembler:
+        """
+        Build a `Sentinel1Assembler` from a set of SLC products of one datatake.
+
+        Parameters
+        ----------
+        products : Sequence[Sentinel1SLCProductInfo]
+            SLC products belonging to the same acquisition/datatake.
+        pol : str
+            Polarization to read the annotation for (e.g. "vv").
+        statevectors : list of StateVector, optional
+            Orbit state vectors to use. If None, the state vectors embedded
+            in the products' metadata are used (deduplicated).
+        orbit_degree : int, optional
+            Degree of the polynomial fitted to the state vectors. The
+            default is 11.
+        swaths : Sequence[str], optional
+            Subswaths to read. The default is `["iw1", "iw2", "iw3"]`.
+
+        Returns
+        -------
+        Sentinel1Assembler
+        """
         bsids = set()
         bursts_per_swath: dict[str, list[Sentinel1BurstMetadata]] = {}
         product_id_per_bsid = {}
@@ -127,6 +167,7 @@ class Sentinel1Assembler:
         )
 
     def get_primary_cutter(self) -> PrimarySentinel1AcquisitionCutter:
+        """Get (building and caching if needed) the primary acquisition cutter."""
         if self._prim_cutter is None:
             bursts_meta = [
                 meta
@@ -139,6 +180,7 @@ class Sentinel1Assembler:
         return self._prim_cutter
 
     def get_secondary_cutter(self) -> SecondarySentinel1AcquisitionCutter:
+        """Get (building and caching if needed) the secondary acquisition cutter."""
         if self._sec_cutter is None:
             bursts_meta = [
                 meta
@@ -153,6 +195,7 @@ class Sentinel1Assembler:
         return self._sec_cutter
 
     def get_mosaic_model(self) -> Sentinel1MosaicModel:
+        """Build the `Sentinel1MosaicModel` sensor model of the whole assembly."""
         # get the cutter to get the origin and (width, height) of the mosaic
         cutter = self.get_secondary_cutter()
 
@@ -185,6 +228,7 @@ class Sentinel1Assembler:
         return proj_model
 
     def get_cropper(self, roi: Roi) -> Sentinel1AssemblyCropper:
+        """Get a `Sentinel1AssemblyCropper` to crop/coregister onto `roi` of this mosaic."""
         return Sentinel1AssemblyCropper(self, roi)
 
     def get_image_readers(
@@ -194,6 +238,26 @@ class Sentinel1Assembler:
         pol: str,
         calibration: Optional[str],
     ):
+        """
+        Get an image reader (optionally calibrating) for each requested burst.
+
+        Parameters
+        ----------
+        products : Sequence[Sentinel1SLCProductInfo]
+            Products the bursts belong to.
+        bsids : set of str
+            BSIDs to get a reader for.
+        pol : str
+            Polarization to read.
+        calibration : str, optional
+            Calibration method ("sigma", "gamma" or "beta"), or None to
+            read the raw (uncalibrated) raster.
+
+        Returns
+        -------
+        dict bsid -> eos.sar.io.ImageReader
+            Reader for each requested burst.
+        """
         product_per_id = {p.product_id: p for p in products}
 
         readers = {}
@@ -209,6 +273,7 @@ class Sentinel1Assembler:
         return readers
 
     def get_doppler(self, bsid: str) -> Sentinel1Doppler:
+        """Get the `Sentinel1Doppler` predictor for the given burst."""
         return sentinel1.doppler_info.doppler_from_meta(
             self.get_single_burst_meta(bsid), self.orbit
         )
@@ -231,6 +296,7 @@ class Sentinel1Assembler:
                 )
 
     def get_full_bistatic_reference(self, bsid: str) -> FullBistaticReference:
+        """Get the IW2 reference metadata (building and caching if needed) for the burst's product."""
         if self._ref_per_product_id is None:
             self._set_full_bistatic_reference()
         assert self._ref_per_product_id
@@ -245,6 +311,37 @@ class Sentinel1Assembler:
         intra_pulse: bool = False,
         alt_fm_mismatch: bool = False,
     ) -> list[ImageCorrectionEstimator]:
+        """
+        Build the list of coordinate correction estimators for a given burst.
+
+        See `eos.products.sentinel1.coordinate_correction.s1_corrections_from_meta`
+        for the meaning of the flags.
+
+        Parameters
+        ----------
+        bsid : str
+            BSID of the burst to build the corrections for.
+        apd : bool, optional
+            If True, add the atmospheric phase delay correction. The
+            default is False.
+        bistatic : bool, optional
+            If True, add the (simple or full) bistatic correction. The
+            default is False.
+        full_bistatic : bool, optional
+            If True (and `bistatic` is True), use the full bistatic
+            correction (requires IW2 metadata) instead of the simple one.
+            The default is False.
+        intra_pulse : bool, optional
+            If True, add the intra-pulse correction. The default is False.
+        alt_fm_mismatch : bool, optional
+            If True, add the altitude/FM-rate mismatch correction. The
+            default is False.
+
+        Returns
+        -------
+        list of ImageCorrectionEstimator
+            The requested coordinate correction estimators.
+        """
         burst_meta = self.get_single_burst_meta(bsid)
         coord_corrections = sentinel1.coordinate_correction.s1_corrections_from_meta(
             burst_meta,
@@ -261,10 +358,12 @@ class Sentinel1Assembler:
         return coord_corrections
 
     def get_coord_corrector(self, bsid: str, **kwargs) -> Corrector:
+        """Build a `Corrector` for the given burst. See `get_coord_corrections`."""
         coord_corrections = self.get_coord_corrections(bsid, **kwargs)
         return Corrector(coord_corrections)
 
     def get_corrector_per_bsid(self, bsids, **kwargs) -> dict[str, Corrector]:
+        """Build a `Corrector` for each of the given bursts. See `get_coord_corrections`."""
         corrector_per_bsid = {}
         for bsid in bsids:
             corrector_per_bsid[bsid] = self.get_coord_corrector(bsid, **kwargs)
@@ -273,6 +372,24 @@ class Sentinel1Assembler:
     def get_burst_models(
         self, bsids: Iterable[str], correction_dict={}, **kwargs
     ) -> dict[str, Sentinel1BurstModel]:
+        """
+        Build the `Sentinel1BurstModel` sensor model for each requested burst.
+
+        Parameters
+        ----------
+        bsids : Iterable[str]
+            BSIDs to build a model for.
+        correction_dict : dict, optional
+            Keyword arguments forwarded to `get_coord_corrector` (which
+            flags of `get_coord_corrections` to enable). The default is {}.
+        **kwargs
+            Extra keyword arguments forwarded to
+            `eos.products.sentinel1.proj_model.burst_model_from_burst_meta`.
+
+        Returns
+        -------
+        dict bsid -> Sentinel1BurstModel
+        """
         metas = self.get_burst_metas(bsids)
         models = {
             bsid: sentinel1.proj_model.burst_model_from_burst_meta(
@@ -286,6 +403,7 @@ class Sentinel1Assembler:
         return models
 
     def get_swath_model(self, swath: str) -> Sentinel1SwathModel:
+        """Build the `Sentinel1SwathModel` sensor model for a given subswath."""
         bsids_in_swath = sorted([b for b in self.bsids if _swath_from_bsid(b) == swath])
         burst_metas = [self.meta_per_bsid_per_swath[swath][b] for b in bsids_in_swath]
         swath_model = sentinel1.proj_model.swath_model_from_bursts_meta(
@@ -296,6 +414,21 @@ class Sentinel1Assembler:
     def get_burst_resampler(
         self, bsid: str, dst_burst_shape: tuple[int, int], matrix
     ) -> Sentinel1BurstResample:
+        """Build a `Sentinel1BurstResample` for the given burst, shape and matrix.
+
+        Parameters
+        ----------
+        bsid : str
+            BSID of the burst to build the resampler for.
+        dst_burst_shape : tuple
+            (h, w) shape of the destination burst.
+        matrix : ndarray
+            Affine registration matrix.
+
+        Returns
+        -------
+        Sentinel1BurstResample
+        """
         return sentinel1.burst_resamp.burst_resample_from_meta(
             self.get_single_burst_meta(bsid),
             dst_burst_shape,
@@ -304,18 +437,21 @@ class Sentinel1Assembler:
         )
 
     def get_single_burst_meta(self, bsid: str) -> Sentinel1BurstMetadata:
+        """Get the metadata of a single burst."""
         swath = _swath_from_bsid(bsid)
         return self.meta_per_bsid_per_swath[swath][bsid]
 
     def get_burst_metas(
         self, bsids: Iterable[str]
     ) -> dict[str, Sentinel1BurstMetadata]:
+        """Get the metadata of each of the given bursts."""
         metas = {}
         for bsid in bsids:
             metas[bsid] = self.get_single_burst_meta(bsid)
         return metas
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize this assembler to a plain, JSON-friendly dict."""
         return {
             "meta_per_bsid_per_swath": {
                 k: {kk: vv.to_dict() for kk, vv in v.items()}
@@ -328,6 +464,7 @@ class Sentinel1Assembler:
 
     @staticmethod
     def from_dict(dict) -> Sentinel1Assembler:
+        """Build a `Sentinel1Assembler` from a dict produced by `to_dict`."""
         meta_per_bsid_per_swath = {
             k: {kk: Sentinel1BurstMetadata.from_dict(vv) for kk, vv in v.items()}
             for k, v in dict["meta_per_bsid_per_swath"].items()
@@ -341,6 +478,15 @@ class Sentinel1Assembler:
 
 
 class Sentinel1AssemblyCropper:
+    """Coregister and crop a secondary SLC acquisition onto a primary mosaic roi.
+
+    Built via `Sentinel1Assembler.get_cropper`, this identifies which bursts
+    of the primary mosaic contribute to `roi`, then on `crop` registers a
+    secondary acquisition's bursts onto that roi (estimating a per-burst
+    resampling matrix from DEM-derived ground control points) and resamples
+    them into a single output array.
+    """
+
     _cropper_fn: Optional[Callable[..., Any]]
 
     def __init__(self, assembler: Sentinel1Assembler, roi: Roi):
@@ -490,6 +636,47 @@ class Sentinel1AssemblyCropper:
         calibration: Optional[str] = None,
         reramp: bool = True,
     ):
+        """
+        Coregister and crop `products` onto this cropper's roi.
+
+        On the first call, this fetches a DEM over the roi and estimates,
+        from ground control points, the (primary) azimuth time/range of the
+        roi for each contributing burst; this is then reused on subsequent
+        calls (e.g. to crop several polarizations of the same secondary
+        acquisition).
+
+        Parameters
+        ----------
+        products : Sequence[Sentinel1SLCProductInfo]
+            Secondary SLC products (of a single acquisition/datatake) to
+            coregister and crop.
+        pol : str
+            Polarization to read.
+        statevectors : list of StateVector, optional
+            Orbit state vectors of the secondary acquisition. If None, the
+            state vectors embedded in the products' metadata are used.
+        orbit_degree : int, optional
+            Degree of the polynomial fitted to the state vectors. The
+            default is 11.
+        get_complex : bool
+            If True, read and resample the complex raster; otherwise the
+            amplitude.
+        dem_source : eos.dem.DEMSource, optional
+            Source used to fetch the DEM needed for registration. If None,
+            `eos.dem.get_any_source()` is used. The default is None.
+        calibration : str, optional
+            Calibration method ("sigma", "gamma" or "beta"), or None to
+            read the raw (uncalibrated) raster. The default is None.
+        reramp : bool, optional
+            If False, skip reramping after resampling. The default is True.
+
+        Returns
+        -------
+        array : ndarray
+            Coregistered and resampled crop, same shape as this cropper's roi.
+        resamplers : dict bsid -> Sentinel1BurstResample
+            Resampler applied for each contributing burst.
+        """
         if self._cropper_fn is None:
             if dem_source is None:
                 dem_source = eos.dem.get_any_source()
@@ -508,11 +695,20 @@ class Sentinel1AssemblyCropper:
         return array, resamplers
 
     def get_proj_model(self) -> Sentinel1MosaicModel:
+        """Get the mosaic sensor model restricted to this cropper's roi."""
         mosaic_model = self.assembler.get_mosaic_model()
         return mosaic_model.to_cropped_mosaic(self.roi)
 
 
 class Sentinel1GRDAssembler:
+    """Assemble one or more Sentinel-1 GRD products of a datatake into a mosaic.
+
+    Analogous to `Sentinel1Assembler` but for GRD products: places each
+    product's raster within a single mosaic (stacked in azimuth), and
+    provides helpers to build the mosaic's sensor model and to read/stitch
+    crops across product boundaries.
+    """
+
     orbit: Orbit
 
     def __init__(self, rois, rois_orig, meta: Sentinel1GRDMetadata, orbit: Orbit):
@@ -530,6 +726,31 @@ class Sentinel1GRDAssembler:
         orbit_degree: int = 11,
         startend_datatake_cut: bool = True,
     ) -> Sentinel1GRDAssembler:
+        """
+        Build a `Sentinel1GRDAssembler` from a set of GRD products of one datatake.
+
+        Parameters
+        ----------
+        products : Sequence[Sentinel1GRDProductInfo]
+            GRD products of consecutive slices from the same
+            acquisition/datatake.
+        pol : str
+            Polarization to read the annotation for (e.g. "vv").
+        statevectors : list of StateVector, optional
+            Orbit state vectors to use. If None, the state vectors embedded
+            in the products' metadata are used (deduplicated).
+        orbit_degree : int, optional
+            Degree of the polynomial fitted to the state vectors. The
+            default is 11.
+        startend_datatake_cut : bool, optional
+            If True, crop the top of the first product and the bottom of
+            the last product by 100 lines, to avoid the intensity gradient
+            observed at datatake boundaries. The default is True.
+
+        Returns
+        -------
+        Sentinel1GRDAssembler
+        """
         products = sorted(products, key=lambda p: p.product_id)
         xmls = [p.get_xml_annotation(pol) for p in products]
         metas = [sentinel1.metadata.extract_grd_metadata(xml) for xml in xmls]
@@ -585,14 +806,32 @@ class Sentinel1GRDAssembler:
     def get_proj_model(
         self, coord_corrector: Corrector = Corrector()
     ) -> Sentinel1GRDModel:
+        """Build the `Sentinel1GRDModel` sensor model of the assembled mosaic."""
         return sentinel1.proj_model.grd_model_from_meta(
             self._meta, self.orbit, coord_corrector
         )
 
     def get_metadata(self) -> Sentinel1GRDMetadata:
+        """Get the metadata of the assembled mosaic."""
         return self._meta
 
     def crop(self, roi: Roi, readers: dict[str, ImageReader]):
+        """
+        Read and stitch a crop of the mosaic, possibly spanning several products.
+
+        Parameters
+        ----------
+        roi : eos.sar.roi.Roi
+            Roi of the crop, referenced to the mosaic origin.
+        readers : dict product_id -> eos.sar.io.ImageReader
+            Reader for each contributing product.
+
+        Returns
+        -------
+        ndarray of float32
+            The stitched crop, of shape `roi.get_shape()`.
+        """
+
         def gen():
             for pid, reader in readers.items():
                 proi = self._rois[pid]

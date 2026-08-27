@@ -21,6 +21,7 @@ class Roi:
         return f"Roi(col={self.col}, row={self.row}, w={self.w}, h={self.h})"
 
     def copy(self) -> Roi:
+        """Return a new Roi with the same col, row, w, h."""
         return Roi.from_roi_tuple(self.to_roi())
 
     def __eq__(self, o: object) -> bool:
@@ -29,6 +30,7 @@ class Roi:
         return self.to_roi() == o.to_roi()
 
     def set_from_roi(self, col: int, row: int, w: int, h: int) -> None:
+        """Set the col, row, w, h attributes of this Roi in place."""
         self.col = col
         self.row = row
         self.w = w
@@ -165,15 +167,19 @@ class Roi:
         return bbox_bounds
 
     def to_roi(self) -> tuple[int, int, int, int]:
+        """Return the (col, row, w, h) representation of this Roi."""
         return (self.col, self.row, self.w, self.h)
 
     def to_bounds(self) -> tuple[int, int, int, int]:
+        """Return the (col_min, row_min, col_max, row_max) bounds representation of this Roi."""
         return Roi.roi_to_bounds(self.to_roi())
 
     def get_shape(self) -> tuple[int, int]:
+        """Return the (h, w) shape of this Roi."""
         return (self.h, self.w)
 
     def get_origin(self) -> tuple[int, int]:
+        """Return the (col, row) origin of this Roi."""
         return self.col, self.row
 
     def to_bounding_points(self, homogeneous: bool = False):
@@ -203,6 +209,22 @@ class Roi:
         return points
 
     def warp(self, matrix, inplace: bool = False) -> Roi:
+        """
+        Warp the bounding box of this roi through a matrix and return the
+        axis-aligned bounding box of the warped points.
+
+        Parameters
+        ----------
+        matrix : ndarray (3, 3)
+            Homogeneous transformation matrix applied to the bounding points.
+        inplace : bool, optional
+            If True, perform the modification inplace. The default is False.
+
+        Returns
+        -------
+        out_roi : Roi
+            Roi of the axis-aligned bounding box of the warped points.
+        """
         # input bounding points
         bound_points = self.to_bounding_points(homogeneous=True)
         # warp points using the matrix
@@ -258,6 +280,7 @@ class Roi:
         return self.obj_from_roi_tuple(out_roi, inplace=inplace), Roi(left, up, w, h)
 
     def assert_valid(self, parent_shape: tuple[int, int]) -> None:
+        """Assert that this Roi lies entirely within an image of the given (h, w) parent_shape."""
         h_parent, w_parent = parent_shape
         col_child_min, row_child_min, col_child_max, row_child_max = self.to_bounds()
         msg = "Roi outside of parent"
@@ -356,8 +379,6 @@ class Roi:
 
         Parameters
         ----------
-        in_roi : tuple
-            (col, row, w, h) of the input roi in the input image.
         input_parent_shape : tuple
             (h, w) of the input image that contains the input roi.
         output_parent_shape : tuple
@@ -403,18 +424,21 @@ class Roi:
 
         Returns
         -------
-
+        out_roi : Roi
+            The translated region of interest.
         """
         c, r, w, h = self.to_roi()
         out_roi = (c + col, r + row, w, h)
         return self.obj_from_roi_tuple(out_roi, inplace=inplace)
 
     def crop_array(self, arr):
+        """Crop a 2D array to the bounds of this Roi."""
         col_min, row_min, col_max, row_max = self.to_bounds()
         arr_cropped = arr[row_min : row_max + 1, col_min : col_max + 1]
         return arr_cropped
 
     def get_meshgrid(self):
+        """Return (cols_grid, rows_grid) meshgrids of the pixel coordinates covered by this Roi."""
         col, row, w, h = self.to_roi()
         cols_grid, rows_grid = np.meshgrid(
             np.arange(col, col + w), np.arange(row, row + h)
@@ -448,6 +472,23 @@ class Roi:
         return mask
 
     def split_into_tiles(self, tile_width: int, tile_height: int) -> Iterator[Roi]:
+        """
+        Split this Roi into a grid of adjacent tiles, clipped to this Roi.
+
+        Parameters
+        ----------
+        tile_width : int
+            Width in pixels of each tile.
+        tile_height : int
+            Height in pixels of each tile.
+
+        Yields
+        ------
+        Roi
+            Successive tiles covering this Roi, row by row. Tiles on the
+            right/bottom edges are clipped and may be smaller than
+            (tile_width, tile_height).
+        """
         for row in range(self.row, self.row + self.h, tile_height):
             for col in range(self.col, self.col + self.w, tile_width):
                 yield Roi(col, row, tile_width, tile_height).clip(self)

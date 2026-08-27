@@ -1,3 +1,5 @@
+"""Compute the (possibly squinted) line-of-sight (LOS) of Sentinel-1 acquisitions."""
+
 import numpy as np
 
 from eos.products.sentinel1.burst_resamp import Sentinel1BurstResample
@@ -21,6 +23,31 @@ def get_points_3D_azt_rng(
     cropped_mosaic_model: Sentinel1MosaicModel,
     ellipsoid_alt: float,
 ) -> tuple[Arrayf64, Arrayf64, Arrayf64]:
+    """
+    Localize points of a roi on the ellipsoid, and get their azimuth time/range.
+
+    Parameters
+    ----------
+    rows_roi : ndarray
+        Row coordinates, referenced to `roi_in_mosaic`'s origin.
+    cols_roi : ndarray
+        Column coordinates, referenced to `roi_in_mosaic`'s origin.
+    roi_in_mosaic : eos.sar.roi.Roi
+        Roi containing the points, referenced to the mosaic origin.
+    cropped_mosaic_model : Sentinel1MosaicModel
+        Sensor model of the mosaic.
+    ellipsoid_alt : float
+        Altitude above the ellipsoid at which points are localized.
+
+    Returns
+    -------
+    points_3D : ndarray (N, 3)
+        Geocentric cartesian (ECEF) coordinates of the localized points.
+    azt : ndarray (N,)
+        Azimuth time (Zero Doppler) of the points.
+    rng : ndarray (N,)
+        Slant range of the points.
+    """
     rows_in_mosaic = rows_roi + roi_in_mosaic.row
     cols_in_mosaic = cols_roi + roi_in_mosaic.col
     # 3D points on ellipsoid at Zero Doppler condition
@@ -38,6 +65,26 @@ def get_dop_centroid_freq_delta_t(
     rows_on_roi: Arrayf64,
     cols_on_roi: Arrayf64,
 ) -> tuple[Arrayf64, Arrayf64]:
+    """
+    Get the Doppler centroid frequency and sensing-to-zero-Doppler time offset.
+
+    Parameters
+    ----------
+    resampler_on_roi : Sentinel1BurstResample
+        Resampler set on the burst/roi under study, used to evaluate the
+        Doppler parameters.
+    rows_on_roi : ndarray
+        Row coordinates within the roi.
+    cols_on_roi : ndarray
+        Column coordinates within the roi.
+
+    Returns
+    -------
+    dop_centroid_freq : ndarray
+        Doppler centroid frequency at each point.
+    delta_t : ndarray
+        Approximate time between sensing time and Zero Doppler time.
+    """
     eta, ref_time, dop_centroid, dop_rate = resampler_on_roi.get_doppler_params(
         rows_on_roi,
         cols_on_roi,
@@ -65,6 +112,44 @@ def get_los_on_roi(
     normalized: bool = True,
     estimate_in_ENU: bool = False,
 ) -> Arrayf64:
+    """
+    Estimate the (possibly squinted) line-of-sight over a roi within a burst.
+
+    The LOS is computed on a coarse meshgrid over the roi (accounting for
+    the burst's Doppler centroid, i.e. the squint), then interpolated with a
+    fitted polynomial to every pixel of the roi.
+
+    Parameters
+    ----------
+    roi_in_mosaic : eos.sar.roi.Roi
+        Roi to compute the LOS over, referenced to the mosaic origin. Its
+        shape must match `resampler_on_roi.dst_roi_in_burst`.
+    resampler_on_roi : Sentinel1BurstResample
+        Resampler set on the burst/roi under study, used for the Doppler
+        parameters.
+    cropped_mosaic_model : Sentinel1MosaicModel
+        Sensor model of the mosaic.
+    grid_size_col : int, optional
+        Number of grid points in the column direction. The default is 50.
+    grid_size_row : int, optional
+        Number of grid points in the row direction. The default is 50.
+    polynom_degree : int, optional
+        Degree of the polynomial used to interpolate the LOS over the roi.
+        The default is 7.
+    ellipsoid_alt : float, optional
+        Altitude above the ellipsoid at which points are localized. The
+        default is 0.0.
+    normalized : bool, optional
+        If True, the returned LOS vectors are normalized. The default is True.
+    estimate_in_ENU : bool, optional
+        If True, the LOS is converted to the local ENU frame before fitting
+        the polynomial. The default is False.
+
+    Returns
+    -------
+    ndarray (h, w, 3)
+        LOS vector at every pixel of the roi.
+    """
     assert roi_in_mosaic.get_shape() == resampler_on_roi.dst_roi_in_burst.get_shape()
 
     # Get a meshgrid inside the roi_in_mosaic
@@ -127,6 +212,48 @@ def get_los_squinted_mosaic(
     normalized: bool = True,
     estimate_in_ENU: bool = False,
 ) -> Arrayf64:
+    """
+    Estimate the squinted line-of-sight over a full mosaic, burst by burst.
+
+    Calls `get_los_on_roi` for each burst's roi in `rois_in_mosaic`, and
+    stitches the results into a single mosaic-sized LOS array.
+
+    Parameters
+    ----------
+    rois_in_mosaic : dict bsid -> eos.sar.roi.Roi
+        Roi of each burst, referenced to the mosaic origin.
+    resamplers_on_roi : dict bsid -> Sentinel1BurstResample
+        Resampler set on each burst's roi, used for the Doppler parameters.
+    mosaic_height : int
+        Height of the output mosaic.
+    mosaic_width : int
+        Width of the output mosaic.
+    mosaic_proj_model : Sentinel1MosaicModel
+        Sensor model of the mosaic.
+    grid_size_col : int, optional
+        Number of grid points in the column direction, per burst. The
+        default is 50.
+    grid_size_row : int, optional
+        Number of grid points in the row direction, per burst. The default
+        is 50.
+    polynom_degree : int, optional
+        Degree of the polynomial used to interpolate the LOS over each burst
+        roi. The default is 7.
+    ellipsoid_alt : float, optional
+        Altitude above the ellipsoid at which points are localized. The
+        default is 0.0.
+    normalized : bool, optional
+        If True, the returned LOS vectors are normalized. The default is True.
+    estimate_in_ENU : bool, optional
+        If True, the LOS is converted to the local ENU frame before fitting
+        the polynomial. The default is False.
+
+    Returns
+    -------
+    ndarray (mosaic_height, mosaic_width, 3)
+        LOS vector at every pixel of the mosaic (NaN where no burst
+        contributes).
+    """
     out_shape = (mosaic_height, mosaic_width, 3)
     out = np.full(out_shape, np.nan, dtype=np.float64)
 
@@ -162,6 +289,43 @@ def get_los_ZeroDoppler_mosaic(
     normalized: bool = True,
     estimate_in_ENU: bool = False,
 ) -> Arrayf64:
+    """
+    Estimate the Zero-Doppler (unsquinted) line-of-sight over a full mosaic.
+
+    Unlike `get_los_squinted_mosaic`, this ignores the Doppler centroid
+    (squint) and evaluates the geometric Zero Doppler LOS directly from the
+    mosaic's sensor model on a coarse meshgrid, fitted with a polynomial and
+    evaluated at every pixel.
+
+    Parameters
+    ----------
+    mosaic_height : int
+        Height of the output mosaic.
+    mosaic_width : int
+        Width of the output mosaic.
+    mosaic_proj_model : Sentinel1MosaicModel
+        Sensor model of the mosaic.
+    grid_size_col : int, optional
+        Number of grid points in the column direction. The default is 50.
+    grid_size_row : int, optional
+        Number of grid points in the row direction. The default is 50.
+    polynom_degree : int, optional
+        Degree of the polynomial used to interpolate the LOS over the mosaic.
+        The default is 7.
+    ellipsoid_alt : float, optional
+        Altitude above the ellipsoid at which points are localized. The
+        default is 0.0.
+    normalized : bool, optional
+        If True, the returned LOS vectors are normalized. The default is True.
+    estimate_in_ENU : bool, optional
+        If True, the LOS is converted to the local ENU frame before fitting
+        the polynomial. The default is False.
+
+    Returns
+    -------
+    ndarray (mosaic_height, mosaic_width, 3)
+        LOS vector at every pixel of the mosaic.
+    """
     ZeroDoppler_los_predictor = LOSPredictor.from_proj_model_grid_size(
         mosaic_proj_model,
         grid_size_col,

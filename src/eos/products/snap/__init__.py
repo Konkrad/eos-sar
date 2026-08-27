@@ -1,3 +1,7 @@
+"""Metadata parsing and sensor model for SAR products exported by ESA SNAP
+(DIMAP format), including coregistered stacks with primary/secondary bands.
+"""
+
 from __future__ import annotations
 
 import os
@@ -23,6 +27,11 @@ from eos.sar.projection_correction import Corrector
 
 @dataclass(frozen=True)
 class SnapMetadata:
+    """Metadata for one product (primary or secondary) of a SNAP DIMAP stack.
+
+    Instances are produced by :func:`parse_snap_metadatas`.
+    """
+
     product_id: str
     state_vectors: list[StateVector]
     orbit_direction: Literal["ascending", "descending"]
@@ -43,16 +52,42 @@ class SnapMetadata:
 
     @property
     def azimuth_time_interval(self) -> float:
+        """Azimuth time interval in seconds between two consecutive lines."""
         return 1.0 / self.azimuth_frequency
 
     @property
     def range_time_interval(self):
+        """Range time interval in seconds between two consecutive samples."""
         return 1.0 / self.range_sampling_rate
 
     def get_image_path(self, band_name: str) -> str:
+        """Return the image file path for the given band name.
+
+        Parameters
+        ----------
+        band_name : str
+            Name of the band (as it appears in ``self.bands``).
+
+        Returns
+        -------
+        str
+            Path to the band's raster file.
+        """
         return self.bands[band_name]
 
     def try_open_as_complex(self) -> ImageReader:
+        """Open the paired real ("i_") and imaginary ("q_") bands as one complex image.
+
+        Requires that ``self.bands`` contains exactly one band whose name
+        starts with ``"i_"`` and exactly one starting with ``"q_"``; raises
+        an ``Exception`` otherwise.
+
+        Returns
+        -------
+        ImageReader
+            Reader that returns a complex64 array combining the real and
+            imaginary bands for a given window.
+        """
         real_paths = [
             path for name, path in self.bands.items() if name.startswith("i_")
         ]
@@ -221,6 +256,22 @@ def _parse_product(
 
 
 def parse_snap_metadatas(path: str) -> list[SnapMetadata]:
+    """Parse a SNAP DIMAP ``.dim`` file into one :class:`SnapMetadata` per product.
+
+    The primary product's metadata is returned first, followed by any
+    coregistered secondary ("slave") products. Bands not referenced by a
+    secondary product are assigned to the primary product.
+
+    Parameters
+    ----------
+    path : str
+        Path to the DIMAP ``.dim`` XML file.
+
+    Returns
+    -------
+    list of SnapMetadata
+        Metadata for the primary product followed by any secondary products.
+    """
     root = os.path.dirname(os.path.realpath(path))
     xml_content = open(path).read()
     data = xmltodict.parse(xml_content)["Dimap_Document"]
@@ -274,6 +325,13 @@ def parse_snap_metadatas(path: str) -> list[SnapMetadata]:
 
 @dataclass(frozen=True)
 class SnapModel(SensorModel):
+    """SensorModel implementation for SAR products exported by ESA SNAP.
+
+    Wraps a :class:`~eos.sar.model_helper.GenericSensorModelHelper` built from
+    the product's orbit and timing to implement the projection/localization
+    interface defined by :class:`~eos.sar.model.SensorModel`.
+    """
+
     generic_model: GenericSensorModelHelper
     # for SensorModel:
     w: int
@@ -285,6 +343,24 @@ class SnapModel(SensorModel):
     def from_metadata(
         meta: SnapMetadata, orbit_degree: int, corrector: Corrector = Corrector()
     ) -> SnapModel:
+        """Build a :class:`SnapModel` from parsed product metadata.
+
+        Parameters
+        ----------
+        meta : SnapMetadata
+            Metadata parsed with :func:`parse_snap_metadatas`.
+        orbit_degree : int
+            Degree of the polynomial used to interpolate the orbit state
+            vectors.
+        corrector : Corrector, optional
+            Coordinate corrector applied by the underlying generic sensor
+            model. Defaults to an identity :class:`Corrector`.
+
+        Returns
+        -------
+        SnapModel
+            Sensor model ready for projection/localization.
+        """
         coordinate = coordinates.SLCCoordinate(
             first_row_time=meta.image_start,
             first_col_time=meta.slant_range_time,
@@ -319,10 +395,18 @@ class SnapModel(SensorModel):
 
     @override
     def to_azt_rng(self, row: ArrayLike, col: ArrayLike) -> tuple[Arrayf64, Arrayf64]:
+        """Convert row/col image coordinates to azimuth time/range.
+
+        Delegates to the underlying :class:`GenericSensorModelHelper`.
+        """
         return self.generic_model.to_azt_rng(row, col)
 
     @override
     def to_row_col(self, azt: ArrayLike, rng: ArrayLike) -> tuple[Arrayf64, Arrayf64]:
+        """Convert azimuth time/range to row/col image coordinates.
+
+        Delegates to the underlying :class:`GenericSensorModelHelper`.
+        """
         return self.generic_model.to_row_col(azt, rng)
 
     @override
@@ -336,6 +420,11 @@ class SnapModel(SensorModel):
         azt_init: Optional[ArrayLike] = None,
         as_azt_rng: bool = False,
     ) -> tuple[CoordArrayLike, CoordArrayLike, CoordArrayLike]:
+        """Project a 3D point into image coordinates.
+
+        See :meth:`eos.sar.model.SensorModel.projection`. Delegates to the
+        underlying :class:`GenericSensorModelHelper`.
+        """
         return self.generic_model.projection(
             x, y, alt, crs, vert_crs, azt_init, as_azt_rng
         )
@@ -352,6 +441,11 @@ class SnapModel(SensorModel):
         y_init: Optional[ArrayLike] = None,
         z_init: Optional[ArrayLike] = None,
     ) -> tuple[CoordArrayLike, CoordArrayLike, CoordArrayLike]:
+        """Localize a point in the image at a certain altitude.
+
+        See :meth:`eos.sar.model.SensorModel.localization`. Delegates to the
+        underlying :class:`GenericSensorModelHelper`.
+        """
         return self.generic_model.localization(
             row, col, alt, crs, vert_crs, x_init, y_init, z_init
         )

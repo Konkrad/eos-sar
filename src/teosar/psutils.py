@@ -8,31 +8,39 @@ from numpy.typing import NDArray
 
 
 def wrap(phi: NDArray) -> NDArray:
+    """Wrap phase values `phi` (radians) into the `[-pi, pi)` interval."""
     return (phi + np.pi) % (2 * np.pi) - np.pi
 
 
 @dataclass(frozen=True)
 class Window:
+    """A rectangular window (col, row, w, h) in an image, in pixel coordinates."""
+
     col: int
     row: int
     w: int
     h: int
 
     def col_slice(self) -> slice:
+        """Return the column `slice` covered by this window."""
         return slice(self.col, self.col + self.w)
 
     def row_slice(self) -> slice:
+        """Return the row `slice` covered by this window."""
         return slice(self.row, self.row + self.h)
 
     def get_slices(self) -> tuple[slice, slice]:
+        """Return the `(row_slice, col_slice)` covered by this window."""
         return self.row_slice(), self.col_slice()
 
     def get_mask(self, parent_shape: tuple[int]) -> NDArray[np.bool_]:
+        """Return a boolean mask of shape `parent_shape`, True inside this window."""
         mask = np.zeros(parent_shape, dtype=bool)
         mask[self.get_slices()] = True
         return mask
 
     def add_margin(self, margin_h, margin_w) -> Window:
+        """Return a new `Window` expanded by `margin_h`/`margin_w` on each side."""
         edge_col = self.col - margin_w
         edge_row = self.row - margin_h
         nh = 2 * margin_h + self.h
@@ -40,6 +48,14 @@ class Window:
         return Window(edge_col, edge_row, nw, nh)
 
     def get_corners(self, *, closed=False) -> list[list[float]]:
+        """Return the `[col, row]` corners of this window, in clockwise order.
+
+        Parameters
+        ----------
+        closed : bool, optional
+            If True, repeat the first corner at the end to close the loop.
+            Defaults to False.
+        """
         col_min = self.col
         col_max = self.col + self.w - 1
         row_min = self.row
@@ -56,6 +72,7 @@ class Window:
         return corners
 
     def make_valid(self, parent_shape: tuple[int, int]) -> Window:
+        """Return this window clipped to the bounds of `parent_shape` (h, w)."""
         p_h, p_w = parent_shape
         col = max(self.col, 0)
         row = max(self.row, 0)
@@ -65,6 +82,23 @@ class Window:
 
 
 def sparse_data_to_raster(sparse_data, row_ps, col_ps, parent_shape: tuple[int, int]):
+    """Scatter sparse point values into a dense raster, filled with nan elsewhere.
+
+    Parameters
+    ----------
+    sparse_data : array
+        Values to scatter, one per point.
+    row_ps, col_ps : array
+        Row and column of each point, same length as `sparse_data`.
+    parent_shape : tuple[int, int]
+        Shape (h, w) of the output raster.
+
+    Returns
+    -------
+    ndarray
+        Raster of shape `parent_shape` with `sparse_data` values at
+        `(row_ps, col_ps)` and nan elsewhere.
+    """
     data_full = np.full(parent_shape, np.nan, dtype=sparse_data.dtype)
     data_full[row_ps, col_ps] = sparse_data
     return data_full

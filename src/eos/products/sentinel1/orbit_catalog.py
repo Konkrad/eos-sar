@@ -1,3 +1,10 @@
+"""Retrieve precise/restituted Sentinel-1 orbit state vectors from a catalog backend.
+
+Query products (grouped by datatake) against a `Sentinel1OrbitCatalogBackend`
+(local .EOF files or CDSE), with optional caching, and get back the orbit
+state vectors covering each datatake.
+"""
+
 import abc
 import datetime
 import fnmatch
@@ -21,7 +28,7 @@ logger = logging.Logger(__name__)
 
 
 class OrbitFileNotFound(Exception):
-    pass
+    """Raised when no orbit file/state vectors could be found for a query."""
 
 
 class OrbitFileType(Enum):
@@ -40,6 +47,7 @@ class OrbitFileType(Enum):
     """These files are available 20 days after the data acquisition."""
 
     def to_product_type(self) -> str:
+        """Return the CDSE/EOF product type string for this orbit file type."""
         if self == OrbitFileType.PREDICTED:
             return "PREORB"
         elif self == OrbitFileType.RESTITUTED:
@@ -57,6 +65,8 @@ Nothing: list[OrbitFileType] = []
 
 @dataclass(frozen=True)
 class Sentinel1OrbitCatalogQuery:
+    """Criteria describing the orbit state vectors to retrieve."""
+
     product_ids: list[str]
     """List of product ids for which we want to find the orbit data."""
     quality: list[OrbitFileType]
@@ -65,13 +75,17 @@ class Sentinel1OrbitCatalogQuery:
 
 @dataclass(frozen=True)
 class Sentinel1OrbitCatalogResult:
+    """Result of an orbit catalog search, keyed by datatake."""
+
     _statevectors_per_datatake: dict[str, list[StateVector]]
 
     def for_product_id(self, product_id: str) -> Optional[list[StateVector]]:
+        """Get the state vectors for the datatake of `product_id`, if found."""
         datatake = _datatake_of(product_id)
         return self._statevectors_per_datatake.get(datatake)
 
     def for_datatake(self, datatake: str) -> Optional[list[StateVector]]:
+        """Get the state vectors for `datatake`, if found."""
         return self._statevectors_per_datatake.get(datatake)
 
     def single(self) -> Optional[list[StateVector]]:
@@ -84,27 +98,41 @@ class Sentinel1OrbitCatalogResult:
 
 @dataclass(frozen=True)
 class QuerySegment:
+    """A single (platform, time interval) segment to cover with state vectors."""
+
     start: datetime.datetime
+    """Start of the time interval to cover (with a safety buffer already applied)."""
     end: datetime.datetime
+    """End of the time interval to cover (with a safety buffer already applied)."""
     platform: Literal["S1A", "S1B", "S1C", "S1D"]
+    """Mission id of the satellite the segment is for."""
 
 
 @dataclass(frozen=True)
 class BackendQuery:
+    """Backend-facing query: segments to resolve, by order of quality preference."""
+
     quality: list[OrbitFileType]
+    """List of accepted file types, by order of priority."""
     segments: list[QuerySegment]
+    """Segments for which state vectors are needed."""
 
 
 @dataclass(frozen=True)
 class BackendResult:
+    """Backend-facing result: state vectors found for each requested segment."""
+
     statevectors_per_item: dict[QuerySegment, list[StateVector]]
+    """State vectors found for each segment of the query (missing segments were not found)."""
 
 
 @dataclass(frozen=True)
 class Sentinel1OrbitCatalogBackend(abc.ABC):
+    """Base class for backends resolving orbit state vectors for query segments."""
+
     @abc.abstractmethod
     def search(self, query: BackendQuery) -> BackendResult:
-        """ """
+        """Get the orbit state vectors covering each segment of `query`."""
 
 
 def _datatake_of(pid: str) -> str:
@@ -141,6 +169,28 @@ def search(
     query: Sentinel1OrbitCatalogQuery,
     cache: eos.cache.Cache = eos.cache.no_cache(),
 ) -> Sentinel1OrbitCatalogResult:
+    """
+    Get orbit state vectors for each datatake of `query`, via `backend`.
+
+    Product ids are grouped by datatake, and for each datatake a time
+    segment (with a small safety buffer) is resolved either from `cache` or
+    by querying `backend`.
+
+    Parameters
+    ----------
+    backend : Sentinel1OrbitCatalogBackend
+        Backend used to resolve segments that are not already cached.
+    query : Sentinel1OrbitCatalogQuery
+        Product ids to cover, and accepted orbit file qualities.
+    cache : eos.cache.Cache, optional
+        Cache used to avoid repeating identical backend queries. The default
+        is to not cache.
+
+    Returns
+    -------
+    Sentinel1OrbitCatalogResult
+        State vectors found, per datatake.
+    """
     if not query.quality:
         return Sentinel1OrbitCatalogResult(_statevectors_per_datatake={})
 
@@ -184,6 +234,23 @@ def parse_statevectors(
     start: datetime.datetime,
     end: datetime.datetime,
 ) -> list[StateVector]:
+    """
+    Parse the orbit state vectors of an orbit file xml within [start, end].
+
+    Parameters
+    ----------
+    xml_content : bytes
+        Content of the orbit (.EOF) xml file.
+    start : datetime.datetime
+        Start of the time interval of interest.
+    end : datetime.datetime
+        End of the time interval of interest.
+
+    Returns
+    -------
+    list of StateVector
+        State vectors found within [start, end].
+    """
     start_timestamp = start.timestamp()
     end_timestamp = end.timestamp()
     context = etree.fromstring(xml_content)
@@ -240,6 +307,22 @@ def _parse_start_end_date_from_orbit_file(
 
 
 def select_orbit_files_from_filelist(files: list[str], seg: QuerySegment) -> list[str]:
+    """
+    Select the local orbit files that fully cover a query segment.
+
+    Parameters
+    ----------
+    files : list of str
+        Candidate orbit filenames (.EOF), formatted as
+        S1A_OPER_AUX_POEORB_OPOD_20161102T122427_V20161012T225943_20161014T005943.EOF.
+    seg : QuerySegment
+        Time interval (and platform) to cover.
+
+    Returns
+    -------
+    list of str
+        Matching filenames, sorted, whose validity interval covers `seg`.
+    """
     candidates = []
     for file in files:
         filename = os.path.basename(file)
@@ -251,11 +334,14 @@ def select_orbit_files_from_filelist(files: list[str], seg: QuerySegment) -> lis
 
 @dataclass(frozen=True)
 class LocalFilesSentinel1OrbitCatalogBackend(Sentinel1OrbitCatalogBackend):
+    """Orbit catalog backend resolving segments from local .EOF files."""
+
     paths: list[str]
     """List of EOF files."""
 
     @override
     def search(self, query: BackendQuery) -> BackendResult:
+        """Resolve each segment of `query` from the local .EOF files in `paths`."""
         statevectors_per_item: dict[QuerySegment, list[StateVector]] = {}
 
         for seg in query.segments:
@@ -289,6 +375,21 @@ class LocalFilesSentinel1OrbitCatalogBackend(Sentinel1OrbitCatalogBackend):
 
 
 def get_access_token(username: str, password: str) -> str:
+    """
+    Get a CDSE OAuth access token for the given credentials.
+
+    Parameters
+    ----------
+    username : str
+        CDSE account username.
+    password : str
+        CDSE account password.
+
+    Returns
+    -------
+    str
+        Bearer access token.
+    """
     endpoint = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
     data = {
         "client_id": "cdse-public",
@@ -402,11 +503,16 @@ def _multithreaded_search(
 
 @dataclass(frozen=True)
 class CDSESentinel1OrbitCatalogBackend(Sentinel1OrbitCatalogBackend):
+    """Orbit catalog backend resolving segments from CDSE (multithreaded)."""
+
     username: str
+    """CDSE account username."""
     password: str
+    """CDSE account password."""
 
     @override
     def search(self, query: BackendQuery) -> BackendResult:
+        """Resolve each segment of `query` from CDSE, concurrently."""
         access_token = get_access_token(self.username, self.password)
         clb = functools.partial(_search_cdse, access_token)
         return _multithreaded_search(query, clb, num_fetch_workers=2)

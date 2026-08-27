@@ -28,11 +28,14 @@ ArrayRealCmpx = NDArray[Union[np.float32, np.complex64]]
 
 
 def pid_from_xml_path(xml_path: str) -> str:
+    """Extract the TerraSAR-X product id (basename without extension) from an XML metadata path."""
     return os.path.splitext(os.path.basename(xml_path))[0]
 
 
 @dataclass(frozen=True)
 class TSXCrop:
+    """A cropped (and, for secondary images, resampled/coregistered) TerraSAR-X image."""
+
     product_id: str
     model: TSXModel
     meta: TSXMetadata
@@ -56,6 +59,41 @@ def crop_images(
     *,
     get_complex=True,
 ) -> tuple[list[TSXCrop], DEM]:
+    """Crop TerraSAR-X images and coregister them onto a primary (reference) image.
+
+    Builds a sensor model for each product, crops the primary image to the
+    ROI given by `roi_provider`, then orbitally registers and resamples
+    each secondary image onto the primary's grid. Also fetches a DEM
+    covering the primary crop.
+
+    Parameters
+    ----------
+    xml_metadata_files : list of str
+        Paths to the XML metadata file of each product, in the same order
+        as `raster_paths`.
+    raster_paths : list of str
+        Paths to the raster file of each product.
+    primary_id : int
+        Index (into both lists) of the primary/reference product.
+    roi_provider : RoiProvider
+        Provider used to determine the region of interest to crop, in the
+        primary image's frame.
+    dem_source : DEMSource
+        DEM source used both by `roi_provider` and to fetch the DEM
+        covering the primary crop.
+    dem_sampling_ratio : float, optional
+        Fraction of DEM points to sample for registration. Defaults to 0.3.
+    get_complex : bool, optional
+        Whether to read the rasters as complex data. Defaults to True.
+
+    Returns
+    -------
+    crops : list of TSXCrop
+        One crop per input product, in the same order as `raster_paths`
+        (the primary crop has an identity `resampling_matrix`).
+    dem : DEM
+        DEM covering the primary crop.
+    """
     backgeocoding_reference = xml_metadata_files[primary_id]
 
     primary_metadata = parse_tsx_metadata(backgeocoding_reference)

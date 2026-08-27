@@ -112,16 +112,16 @@ def ascending_node_crossing_time(
 
     Parameters
     ----------
-    orbit: fitted Orbit instance
-    azt_init: float (optional)
-           Initial guess for the azimuth time
-    max_iterations: int
-            Maximum number of iterations for reaching the solution
-    tol: float
-            Tolerance in seconds of azimuth time precision on the orbit
-            below which the iterations stop
+    orbit : Orbit
+        Fitted Orbit instance.
+    max_iterations : int
+        Maximum number of iterations for reaching the solution
+    tol : float
+        Tolerance in seconds of azimuth time precision on the orbit
+        below which the iterations stop
+
     Returns
-    ------
+    -------
     azt: float
         time of crossing the ascending node
     """
@@ -239,9 +239,11 @@ def iterative_localization(
     tol: float
         Tolerance on the step in gx, gy, gz (in meters)
         iterations stop when all steps dgx, dgy and dgz are below tol
-    Returns:
-        gx, gy, gz: ndarray (N,)
-           Localized 3D point in geocentric coordinates
+
+    Returns
+    -------
+    gx, gy, gz: ndarray (N,)
+        Localized 3D point in geocentric coordinates
 
     Notes
     -----

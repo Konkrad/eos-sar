@@ -1,3 +1,13 @@
+"""Compute and apply a border-noise mask on calibrated/denoised Sentinel-1 GRD rasters.
+
+See ``docs/border_masking_grd.md`` for a detailed description of the method:
+starting from an approximate boolean mask (raster > 0), border flags are
+derived from the first/last row/column, then for each flagged side the
+frontier between border and valid data is found by scanning rows or columns
+from the outer edge inward, so that zero-valued pixels inside the valid
+area (e.g. flat water) are not masked.
+"""
+
 import numpy as np
 
 

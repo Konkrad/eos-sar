@@ -1,3 +1,12 @@
+"""Pipelines orchestrating the teosar overlap/mosaic InSAR processing steps.
+
+These classes chain together the lower-level building blocks in :mod:`teosar.utils`,
+:mod:`teosar.inout` and :mod:`teosar.overlap_utils` (registration, debursting, DEM
+radarcoding, phase simulation, ...) into primary/secondary pipelines, either for a
+mosaicked (deburst-and-crop) product (:class:`PrimaryPipeline`/:class:`SecondaryPipeline`)
+or per-swath burst-overlap product (:class:`OvlPrimaryPipeline`/:class:`OvlSecondaryPipeline`).
+"""
+
 import logging
 import pickle
 from typing import Optional
@@ -21,6 +30,16 @@ PROF = False
 
 
 class Pipeline:
+    """Base class for a single-date processing pipeline.
+
+    Parameters
+    ----------
+    product_ids : list
+        Product IDs (bursts/swaths) that together cover the date being processed.
+    dir_builder
+        Object providing the output paths used to save intermediate/final products.
+    """
+
     def __init__(self, product_ids, dir_builder):
         self.product_ids = product_ids
         self.date = pid2date(product_ids[0])
@@ -31,6 +50,11 @@ class Pipeline:
     def get_inputs(
         self, product_provider, statevectors: Optional[list[StateVector]], polarization
     ):
+        """Fetch the input products for ``self.product_ids`` and assemble them.
+
+        Sets ``self.products`` and ``self.asm`` (the assembler used by subclasses to
+        build proj models, cutters and image readers).
+        """
         print(f"{self.date} Getting inputs")
         self.products, self.asm = inout.get_inputs_for_date(
             self.product_ids, "all", product_provider, statevectors, polarization
@@ -38,10 +62,18 @@ class Pipeline:
         self.log["asm"] = self.asm.to_dict()
 
     def save_log(self):
+        """Write the accumulated ``self.log`` dict to the pipeline's metadata path."""
         inout.dict_to_json(self.log, self.dir_builder.get_meta_path(self.date))
 
 
 class PrimaryPipeline(Pipeline):
+    """Processing pipeline for the primary (reference) date of a mosaicked stack.
+
+    Deburst-crops, registers and radarcodes the primary date's product, producing the
+    debursted SLC crop, its orthorectifier and the radarcoded DEM used by the
+    corresponding :class:`SecondaryPipeline` runs.
+    """
+
     def __init__(self, product_ids, dir_builder, dem_source: eos.dem.DEMSource):
         super().__init__(product_ids, dir_builder)
         self.is_secondary = False
@@ -49,6 +81,11 @@ class PrimaryPipeline(Pipeline):
 
     @conditional_profiler(PROF)
     def roi_info(self, roi_provider: RoiProvider):
+        """Compute the mosaic proj model and the ROI to process, and save a debug SVG.
+
+        Sets ``self.proj_model``, ``self.roi``, ``self.primary_cutter`` and
+        ``self.roi_cutting_info``.
+        """
         # Get primary proj model
         self.proj_model = self.asm.get_mosaic_model()
 
@@ -73,6 +110,7 @@ class PrimaryPipeline(Pipeline):
         self.log["roi_cutting_info"] = self.roi_cutting_info.to_dict()
 
     def download_dem(self):
+        """Fetch a DEM covering ``self.roi`` and save it (in geographic coordinates)."""
         # fetch a dem of the area covered by the proj model
         self.dem = self.proj_model.fetch_dem(self.dem_source, roi=self.roi)
 
@@ -84,6 +122,11 @@ class PrimaryPipeline(Pipeline):
 
     @conditional_profiler(PROF)
     def register(self, dem_sampling_ratio, bistatic, apd, intra_pulse, alt_fm_mismatch):
+        """Estimate the primary-date burst registration (resampling matrices).
+
+        Builds ``self.registrator`` and estimates ``self.burst_resampling_matrices``
+        using the atmospheric/bistatic/intra-pulse corrections requested.
+        """
         print("Getting registrator")
         self.registrator = utils.Registrator(
             self.proj_model,
@@ -105,6 +148,7 @@ class PrimaryPipeline(Pipeline):
 
     @conditional_profiler(PROF)
     def deburst(self, polarization, calibrate, get_complex):
+        """Resample and deburst the primary crop, and save it to disk."""
         readers = self.asm.get_image_readers(
             self.products, self.roi_cutting_info.all_bsids, polarization, calibrate
         )
@@ -129,6 +173,7 @@ class PrimaryPipeline(Pipeline):
 
     @conditional_profiler(PROF)
     def build_orthorectifier(self, res=20):
+        """Build ``self.orthorectifier`` for ``self.roi``, at ``res`` meters resolution."""
         print("set orthorectifier")
         primary_model = self.proj_model
         roi_in_primary = self.roi
@@ -146,6 +191,7 @@ class PrimaryPipeline(Pipeline):
 
     @conditional_profiler(PROF)
     def save_orthorectifier(self):
+        """Save the orthorectifier's metadata and its pixel lookup table to disk."""
         # Save basic info of orthorectifier
         self.ortho_json = {
             "shape": self.orthorectifier.shape,
@@ -165,6 +211,10 @@ class PrimaryPipeline(Pipeline):
 
     @conditional_profiler(PROF)
     def radarcode_dem(self):
+        """Project ``self.dem`` into radar (sensor) geometry over ``self.roi``.
+
+        Sets ``self.heights`` and saves it to ``self.radar_dem_path``.
+        """
         print("radarcoding dem")
 
         self.heights = eos.sar.dem_to_radar.dem_radarcoding(
@@ -178,6 +228,11 @@ class PrimaryPipeline(Pipeline):
     # Save pipeline for later
     @conditional_profiler(PROF)
     def save_pipeline_to_pickle(self):
+        """Pickle the pipeline's state (proj model, deburster, registrator, ...) to disk.
+
+        This lets a :class:`SecondaryPipeline` be re-run later against this primary
+        date without re-executing the whole primary pipeline.
+        """
         pickle_name = self.dir_builder.get_pickle_path(self.date)
 
         # database
@@ -212,6 +267,14 @@ class PrimaryPipeline(Pipeline):
         calibrate,
         get_complex,
     ):
+        """Run the full primary pipeline: inputs, ROI, DEM, ortho, registration, deburst,
+        radarcoding, and save the log and pickled state.
+
+        Returns
+        -------
+        bool
+            Always ``True``; failures raise instead of returning ``False``.
+        """
         self.get_inputs(product_provider, statevectors, polarization)
         self.roi_info(roi_provider)
         self.download_dem()
@@ -226,12 +289,23 @@ class PrimaryPipeline(Pipeline):
 
 
 class SecondaryPipeline(Pipeline):
+    """Processing pipeline for a secondary date, registered against a primary date.
+
+    Registers the secondary date's bursts against a :class:`PrimaryPipeline`'s
+    registrator, debursts the crop and applies the flat-earth and topographic phase
+    corrections needed to form an interferogram with the primary date.
+    """
+
     def __init__(self, product_ids, dir_builder):
         super().__init__(product_ids, dir_builder)
         self.is_secondary = True
 
     @conditional_profiler(PROF)
     def register(self, registrator):
+        """Estimate the secondary-date burst registration using the primary ``registrator``.
+
+        Sets ``self.cutter``, ``self.proj_model`` and ``self.burst_resampling_matrices``.
+        """
         print(f"{self.date} registration estimation")
         self.cutter = self.asm.get_secondary_cutter()
         bsids = self.asm.bsids
@@ -244,6 +318,7 @@ class SecondaryPipeline(Pipeline):
 
     @conditional_profiler(PROF)
     def deburst(self, deburster, polarization, calibrate, get_complex):
+        """Resample and deburst the secondary crop, and save it to disk (no phase correction)."""
         print(f"{self.date} debursting")
         readers = self.asm.get_image_readers(
             self.products,
@@ -270,6 +345,7 @@ class SecondaryPipeline(Pipeline):
 
     @conditional_profiler(PROF)
     def simulate_phase(self, primary_proj_model, roi, heights):
+        """Estimate and save the flat-earth and topographic phase for ``roi``."""
         print(f"{self.date} Flat and topographic phase corrections")
         flat_earth_phase, topo_phase = utils.estimate_corrections(
             primary_proj_model, roi, self.proj_model, heights
@@ -288,6 +364,11 @@ class SecondaryPipeline(Pipeline):
         calibrate,
         get_complex,
     ):
+        """Deburst the secondary crop and multiply in the flat-earth/topographic phase.
+
+        Combines :meth:`deburst` and :meth:`simulate_phase` into a single pass, saving
+        a phase-corrected SLC crop ready for interferogram formation.
+        """
         print(
             f"{self.date} debursting + applying flat and topographic phase corrections"
         )
@@ -340,6 +421,15 @@ class SecondaryPipeline(Pipeline):
         roi,
         heights,
     ):
+        """Run the full secondary pipeline against an already-processed primary date.
+
+        Returns
+        -------
+        bool
+            ``True`` on success. ``False`` if the secondary date is missing bursts
+            present in the primary registrator, or if debursting/phase simulation
+            raises (the exception is logged rather than propagated).
+        """
         self.get_inputs(product_provider, statevectors, polarization)
         self.register(registrator)
 
@@ -373,6 +463,13 @@ class SecondaryPipeline(Pipeline):
 
 
 class OvlPrimaryPipeline(Pipeline):
+    """Primary-date pipeline working on burst overlaps rather than a full mosaic.
+
+    Unlike :class:`PrimaryPipeline`, this processes per-swath burst overlap regions
+    (:class:`~eos.products.sentinel1.overlap.Osid`/:class:`~eos.products.sentinel1.overlap.Bsint`),
+    which is used for Doppler-centroid-style estimation across burst boundaries.
+    """
+
     def __init__(self, product_ids, dir_builder, dem_source: eos.dem.DEMSource):
         super().__init__(product_ids, dir_builder)
         self.dem_source = dem_source
@@ -389,6 +486,11 @@ class OvlPrimaryPipeline(Pipeline):
         self.burst_resampling_matrices: dict[str, np.ndarray] = {}
 
     def set_all_osids(self, swaths):
+        """Build the swath models for ``swaths`` and collect all their overlap OSIDs.
+
+        Sets ``self.swath_models_per_swath``, ``self.ovl_roi_info_per_swath`` and
+        ``self.all_osids``.
+        """
         all_osids: set[Osid] = set()
         self.ovl_roi_info_per_swath = {}
         for swath in swaths:
@@ -401,6 +503,11 @@ class OvlPrimaryPipeline(Pipeline):
         self.all_osids: set[Osid] = all_osids
 
     def set_osids_of_interest(self, osids_of_interest=None):
+        """Restrict processing to ``osids_of_interest`` (default: all available OSIDs).
+
+        Populates the various ``*_of_interest[_per_swath]`` attributes used by the
+        rest of the pipeline.
+        """
         if osids_of_interest is None:
             self.osids_of_interest = self.all_osids
         else:
@@ -420,6 +527,7 @@ class OvlPrimaryPipeline(Pipeline):
         self.swaths_of_interest = list(self.bsint_of_interest_per_swath.keys())
 
     def get_ovl_roi_in_swath(self, bsint):
+        """Return the ``(roi, swath)`` for a given burst-overlap intersection ``bsint``."""
         # Now bsint corresponds to a single swath
         swath = bsint.bsids()[0].split("_")[1].lower()
         ovl_roi_in_swath = self.ovl_roi_info_per_swath[
@@ -428,6 +536,11 @@ class OvlPrimaryPipeline(Pipeline):
         return ovl_roi_in_swath, swath
 
     def get_bsint_coarse_geom(self, bsint, margin=1000, alt_min=-1000, alt_max=9000):
+        """Return a coarse ground-geometry approximation of ``bsint``'s ROI.
+
+        Used to estimate the geographic extent needed to fetch a DEM, without
+        requiring a precise sensor model evaluation.
+        """
         ovl_roi_in_swath, swath = self.get_ovl_roi_in_swath(bsint)
         swath_model = self.swath_models_per_swath[swath]
         return swath_model.get_coarse_approx_geom(
@@ -437,6 +550,8 @@ class OvlPrimaryPipeline(Pipeline):
     def get_bsints_of_interest_coarse_bounds(
         self, margin=1000, alt_min=-1000, alt_max=9000
     ):
+        """Return the coarse ``(lon_min, lat_min, lon_max, lat_max)`` bounds covering all
+        overlaps of interest, used to fetch a DEM for :meth:`download_dem`."""
         lons = []
         lats = []
         for bsint in self.bsint_of_interest:
@@ -448,6 +563,7 @@ class OvlPrimaryPipeline(Pipeline):
         return min(lons), min(lats), max(lons), max(lats)
 
     def download_dem(self):
+        """Fetch a DEM covering all overlaps of interest and save it to disk."""
         self.dem = self.dem_source.fetch_dem(
             self.get_bsints_of_interest_coarse_bounds()
         )
@@ -459,6 +575,11 @@ class OvlPrimaryPipeline(Pipeline):
         )
 
     def register(self, dem_sampling_ratio, bistatic, apd, intra_pulse, alt_fm_mismatch):
+        """Estimate the primary-date registration for each swath of interest.
+
+        Builds ``self.registrator_per_swath`` and updates
+        ``self.burst_resampling_matrices`` with the estimated resampling matrices.
+        """
         print("Getting registrator")
 
         self.primary_cutter = self.asm.get_primary_cutter()
@@ -503,6 +624,7 @@ class OvlPrimaryPipeline(Pipeline):
             )
 
     def resample_swath_ovls(self, swath, polarization, calibrate, get_complex, reramp):
+        """Resample all overlaps of interest in ``swath`` and save each resampled crop."""
         swath_model = self.swath_models_per_swath[swath]
         # this will work on all overlaps in a swath
         overlap_resampler = OverlapResampler(
@@ -531,6 +653,7 @@ class OvlPrimaryPipeline(Pipeline):
             inout.save_img(self.dir_builder.get_img_path(osid, self.date), resamp_ovl)
 
     def radarcode_dem(self, bsint):
+        """Project ``self.dem`` into radar geometry over ``bsint``'s overlap ROI."""
         # Do this once for the primary model
         # radarcoding seems to introduce some fringes/artefacts, might want to avoid it.
 
@@ -557,6 +680,8 @@ class OvlPrimaryPipeline(Pipeline):
         swaths=("iw1", "iw2", "iw3"),
         osids_of_interest=None,
     ):
+        """Run the full overlap primary pipeline: inputs, overlaps, DEM, registration,
+        per-swath resampling and radarcoding, then save the log."""
         self.get_inputs(product_provider, statevectors, polarization)
         self.set_all_osids(swaths)
         self.set_osids_of_interest(osids_of_interest)
@@ -595,6 +720,13 @@ class OvlPrimaryPipeline(Pipeline):
 
 
 class OvlSecondaryPipeline(Pipeline):
+    """Secondary-date counterpart of :class:`OvlPrimaryPipeline`.
+
+    Registers a secondary date against a primary date's per-swath overlap
+    registrators, resamples the matching overlaps, and simulates the flat-earth and
+    topographic phase for each.
+    """
+
     def __init__(self, product_ids, dir_builder):
         super().__init__(product_ids, dir_builder)
 
@@ -608,6 +740,10 @@ class OvlSecondaryPipeline(Pipeline):
         self.secondary_burst_resampling_matrices = {}
 
     def set_all_osids(self):
+        """Build the swath models for all IW swaths and collect their overlap OSIDs.
+
+        Sets ``self.swath_models_per_swath`` and ``self.all_osids``.
+        """
         all_osids: set[Osid] = set()
         for swath in ("iw1", "iw2", "iw3"):
             swath_model = self.asm.get_swath_model(swath)
@@ -618,6 +754,11 @@ class OvlSecondaryPipeline(Pipeline):
         self.all_osids = all_osids
 
     def register(self, registrator_per_swath):
+        """Estimate the secondary-date registration against each swath's ``registrator_per_swath``.
+
+        Updates ``self.secondary_burst_resampling_matrices`` with the estimated
+        resampling matrices, only for the OSIDs shared between the two dates.
+        """
         # code for all swaths
         self.secondary_cutter = self.asm.get_secondary_cutter()
 
@@ -645,6 +786,12 @@ class OvlSecondaryPipeline(Pipeline):
         reramp,
         primary_osids_of_interest,
     ):
+        """Resample, on this secondary date, the overlaps also of interest on the primary date.
+
+        Restricts to the intersection of ``primary_osids_of_interest`` with this
+        swath's available OSIDs, resamples them with ``overlap_resampler`` and saves
+        each resampled crop.
+        """
         print("Resampling on secondary for swath ", swath)
         secondary_swath_model = self.swath_models_per_swath[swath]
         swath_osid_set = set(primary_osids_of_interest).intersection(
@@ -690,6 +837,12 @@ class OvlSecondaryPipeline(Pipeline):
         bsint_of_interest,
         ovl_roi_in_swath_per_bsint,
     ):
+        """Simulate and save the flat-earth/topographic phase for each overlap of a swath.
+
+        ``height_provider`` maps a :class:`~eos.products.sentinel1.overlap.Bsint` to
+        its radarcoded heights (as produced by
+        :meth:`OvlPrimaryPipeline.radarcode_dem`).
+        """
         topo = eos.sar.geom_phase.TopoCorrection(
             primary_swath_model,
             [self.asm.get_mosaic_model()],  # any proj model here works in secondary
@@ -726,6 +879,12 @@ class OvlSecondaryPipeline(Pipeline):
         height_provider,
         ovl_roi_in_swath_per_bsint,
     ):
+        """Run the full overlap secondary pipeline against an already-processed primary date.
+
+        For each swath in ``primary_osids_of_interest_per_swath``, resamples the
+        matching overlaps and simulates their flat-earth/topographic phase, then
+        saves the log.
+        """
         self.get_inputs(product_provider, statevectors, polarization)
         self.set_all_osids()
         self.register(registrator_per_swath)

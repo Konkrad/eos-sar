@@ -44,7 +44,17 @@ def doppler_from_meta(
 
 
 class Sentinel1Doppler:
+    """Predicts the Doppler quantities (centroid, FM rate, ...) of a burst.
+
+    Wraps the azimuth FM rate and Doppler centroid polynomials of a burst
+    (as estimated by the IPF), together with the TOPSAR beam-steering
+    Doppler rate, so that Doppler-dependent quantities (deramping phase,
+    doppler centroid/rate at a given range time, ...) can be evaluated at
+    arbitrary azimuth/range locations within the burst.
+    """
+
     def to_dict(self):
+        """Serialize this object to a plain, JSON-friendly dict."""
         return dict(
             mid_swath_slrt=self.mid_swath_slrt,
             burst_mid_time=self.burst_mid_time,
@@ -56,6 +66,7 @@ class Sentinel1Doppler:
 
     @staticmethod
     def from_dict(dop_dict):
+        """Build a `Sentinel1Doppler` from a dict produced by `to_dict`."""
         return Sentinel1Doppler(
             dop_dict["mid_swath_slrt"],
             dop_dict["burst_mid_time"],
@@ -268,6 +279,7 @@ class Sentinel1Doppler:
         return rg_dpt_dop_rate * self.krot / (rg_dpt_dop_rate - self.krot)
 
     def get_burst_mid_time(self):
+        """Return the azimuth time (UTC timestamp) at the middle of the burst."""
         return self.burst_mid_time
 
     def get_doppler_quantities(self, azt, slrt):

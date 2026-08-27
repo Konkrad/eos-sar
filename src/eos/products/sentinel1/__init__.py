@@ -1,3 +1,11 @@
+"""Sentinel-1 SLC and GRD product reading and processing.
+
+Submodules cover reading SAFE product metadata and rasters, orbit state
+vectors, calibration/denoising, deburst and slant-range-to-ground-range
+(SRGR) conversion, coregistration/burst resampling, geometric sensor
+models, border-noise masking, and product assembly/mosaicking.
+"""
+
 from eos.products.sentinel1 import acquisition as acquisition
 from eos.products.sentinel1 import assembler as assembler
 from eos.products.sentinel1 import border_noise_grd as border_noise_grd

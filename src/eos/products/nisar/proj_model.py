@@ -22,6 +22,13 @@ from eos.sar.projection_correction import Corrector
 
 @dataclass(frozen=True)
 class NisarModel(SensorModel):
+    """SensorModel implementation for NISAR RSLC products.
+
+    Wraps a `GenericSensorModelHelper` built from the product's orbit and
+    timing (for a chosen frequency) to implement the projection/localization
+    interface defined by `eos.sar.model.SensorModel`.
+    """
+
     generic_model: GenericSensorModelHelper
     # for SensorModel:
     w: int
@@ -38,6 +45,32 @@ class NisarModel(SensorModel):
         max_iterations: int = 20,
         tolerance: float = 0.0001,
     ) -> NisarModel:
+        """Build a `NisarModel` from parsed product metadata, a frequency, and an orbit.
+
+        Parameters
+        ----------
+        meta : NisarRSLCMetadata
+            Parsed NISAR RSLC metadata.
+        frequency : {"A", "B"}
+            Frequency band to build the model for; `meta.frequency_a` or
+            `meta.frequency_b` must be set accordingly.
+        orbit : Orbit
+            Orbit to use for the sensor model.
+        corrector : Corrector, optional
+            Coordinate corrector applied by the underlying generic sensor
+            model. Defaults to an identity `Corrector`.
+        max_iterations : int, optional
+            Maximum number of iterations for the underlying iterative
+            projection/localization. Defaults to 20.
+        tolerance : float, optional
+            Localization tolerance, in the same units as the orbit
+            positions (meters). Defaults to 0.0001.
+
+        Returns
+        -------
+        NisarModel
+            Sensor model ready for projection/localization.
+        """
         frequency_meta = meta.frequency_a if frequency == "A" else meta.frequency_b
         assert frequency_meta is not None, f"Frequency {frequency} metadata is None"
 
@@ -73,10 +106,18 @@ class NisarModel(SensorModel):
 
     @override
     def to_azt_rng(self, row: ArrayLike, col: ArrayLike) -> tuple[Arrayf64, Arrayf64]:
+        """Convert row/col image coordinates to azimuth time/range.
+
+        Delegates to the underlying `GenericSensorModelHelper`.
+        """
         return self.generic_model.to_azt_rng(row, col)
 
     @override
     def to_row_col(self, azt: ArrayLike, rng: ArrayLike) -> tuple[Arrayf64, Arrayf64]:
+        """Convert azimuth time/range to row/col image coordinates.
+
+        Delegates to the underlying `GenericSensorModelHelper`.
+        """
         return self.generic_model.to_row_col(azt, rng)
 
     @override
@@ -90,6 +131,11 @@ class NisarModel(SensorModel):
         azt_init: Optional[ArrayLike] = None,
         as_azt_rng: bool = False,
     ) -> tuple[CoordArrayLike, CoordArrayLike, CoordArrayLike]:
+        """Project a 3D point into image coordinates.
+
+        See `eos.sar.model.SensorModel.projection`. Delegates to the
+        underlying `GenericSensorModelHelper`.
+        """
         return self.generic_model.projection(
             x, y, alt, crs, vert_crs, azt_init, as_azt_rng
         )
@@ -106,12 +152,18 @@ class NisarModel(SensorModel):
         y_init: Optional[ArrayLike] = None,
         z_init: Optional[ArrayLike] = None,
     ) -> tuple[CoordArrayLike, CoordArrayLike, CoordArrayLike]:
+        """Localize a point in the image at a certain altitude.
+
+        See `eos.sar.model.SensorModel.localization`. Delegates to the
+        underlying `GenericSensorModelHelper`.
+        """
         return self.generic_model.localization(
             row, col, alt, crs, vert_crs, x_init, y_init, z_init
         )
 
     @property
     def coordinate(self) -> coordinates.SLCCoordinate:
+        """The underlying `SLCCoordinate` (azimuth/range timing) of this model."""
         _coordinate = self.generic_model.coordinate
         assert isinstance(_coordinate, coordinates.SLCCoordinate)
         return _coordinate

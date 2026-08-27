@@ -1,3 +1,5 @@
+"""Read Sentinel-1 SLC/GRD SAFE products, from a local directory or CDSE/S3."""
+
 from __future__ import annotations
 
 import abc
@@ -28,11 +30,14 @@ logger = logging.Logger(__name__)
 
 @dataclass(frozen=True)
 class SafeFormat:
+    """Locate files (annotation, calibration, measurement, ...) within a SAFE product."""
+
     product_id: str
     links: list[str]
 
     @classmethod
     def from_manifest(cls, product_id: str, manifest_content: str) -> SafeFormat:
+        """Build a `SafeFormat` from a product id and the content of its manifest.safe."""
         links = [
             l.replace("./", "")
             for l in metadata.get_file_links_from_manifest(manifest_content)
@@ -60,6 +65,30 @@ class SafeFormat:
         return f"{prefix}{mission.lower()}-{mode_beam.lower()}{swath_integer}-{product_type.lower()}.*{polarization.lower()}"
 
     def search(self, swath: str, pol: str, prefix: str = "") -> str:
+        """
+        Find the file link matching a given swath, polarization and prefix.
+
+        Parameters
+        ----------
+        swath : str
+            Swath identifier (e.g. "IW1"), or "" for GRD products.
+        pol : str
+            Polarization (e.g. "vv", "vh").
+        prefix : str, optional
+            Prefix to restrict the search to a subdirectory/file kind
+            (e.g. "measurement/", "annotation/calibration/noise-"). The
+            default is "".
+
+        Returns
+        -------
+        str
+            The matching link, relative to the SAFE root.
+
+        Raises
+        ------
+        FileNotFoundError
+            If no link matches.
+        """
         pattern = self._get_file_pattern(swath, pol, prefix)
         for link in self.links:
             match = re.search(pattern, link)
@@ -100,6 +129,8 @@ def extract_ipf(manifest: str) -> str:
 
 @dataclass(frozen=True)
 class ProductProperties:
+    """Properties of a Sentinel-1 product, parsed from its manifest.safe."""
+
     platform: Literal["S1A", "S1B", "S1C", "S1D"]
     footprint: list[tuple[float, float]]
     """ list of (lat, lon) """
@@ -116,6 +147,7 @@ class ProductProperties:
 
     @staticmethod
     def from_manifest(manifest: str) -> ProductProperties:
+        """Parse a `ProductProperties` from the content of a manifest.safe file."""
         namespaces = {
             "xfdu": "urn:ccsds:schema:xfdu:1",
             "safe": "http://www.esa.int/safe/sentinel-1.0",
@@ -180,22 +212,38 @@ class ProductProperties:
 
 @dataclass
 class Sentinel1SLCProductInfo(abc.ABC):
+    """Base class giving access to the files of a Sentinel-1 SLC product.
+
+    Concrete subclasses implement access to a SAFE product from a given
+    storage backend (local directory, CDSE/S3, ...).
+    """
+
     product_id: str
 
     @abc.abstractmethod
-    def get_image_reader(self, swath: str, pol: str) -> ImageReader: ...
+    def get_image_reader(self, swath: str, pol: str) -> ImageReader:
+        """Get a reader for the measurement raster of `swath`/`pol`."""
+        ...
 
     @abc.abstractmethod
-    def get_xml_annotation(self, swath: str, pol: str) -> str: ...
+    def get_xml_annotation(self, swath: str, pol: str) -> str:
+        """Get the content of the annotation xml file for `swath`/`pol`."""
+        ...
 
     @abc.abstractmethod
-    def get_xml_calibration(self, swath: str, pol: str) -> str: ...
+    def get_xml_calibration(self, swath: str, pol: str) -> str:
+        """Get the content of the calibration xml file for `swath`/`pol`."""
+        ...
 
     @abc.abstractmethod
-    def get_xml_noise(self, swath: str, pol: str) -> str: ...
+    def get_xml_noise(self, swath: str, pol: str) -> str:
+        """Get the content of the noise xml file for `swath`/`pol`."""
+        ...
 
     @abc.abstractmethod
-    def get_manifest(self) -> str: ...
+    def get_manifest(self) -> str:
+        """Get the content of the product's manifest.safe file."""
+        ...
 
     @property
     def ipf(self) -> str:
@@ -215,32 +263,59 @@ class Sentinel1SLCProductInfo(abc.ABC):
 
 @dataclass
 class Sentinel1GRDProductInfo(abc.ABC):
+    """Base class giving access to the files of a Sentinel-1 GRD product.
+
+    Concrete subclasses implement access to a SAFE product from a given
+    storage backend (local directory, CDSE/S3, ...).
+    """
+
     product_id: str
 
     @abc.abstractmethod
-    def get_image_reader(self, pol: str) -> ImageReader: ...
+    def get_image_reader(self, pol: str) -> ImageReader:
+        """Get a reader for the measurement raster of `pol`."""
+        ...
 
     @abc.abstractmethod
-    def get_xml_annotation(self, pol: str) -> str: ...
+    def get_xml_annotation(self, pol: str) -> str:
+        """Get the content of the annotation xml file for `pol`."""
+        ...
 
     @abc.abstractmethod
-    def get_xml_calibration(self, pol: str) -> str: ...
+    def get_xml_calibration(self, pol: str) -> str:
+        """Get the content of the calibration xml file for `pol`."""
+        ...
 
     @abc.abstractmethod
-    def get_xml_noise(self, pol: str) -> str: ...
+    def get_xml_noise(self, pol: str) -> str:
+        """Get the content of the noise xml file for `pol`."""
+        ...
 
     @abc.abstractmethod
-    def get_manifest(self) -> str: ...
+    def get_manifest(self) -> str:
+        """Get the content of the product's manifest.safe file."""
+        ...
 
     @property
     def ipf(self) -> str:
+        """IPF version of the product (e.g. "002.90").
+
+        Warning: this property fetches the manifest and parses it.
+            Avoid calling this function multiple times if possible.
+        """
         return extract_ipf(self.get_manifest())
 
     def get_properties(self) -> ProductProperties:
+        """
+        Warning: this function fetches the manifest and parses it.
+            Avoid calling this function multiple times if possible.
+        """
         return ProductProperties.from_manifest(self.get_manifest())
 
 
 class SafeSentinel1ProductInfo(Sentinel1SLCProductInfo):
+    """Read a Sentinel-1 SLC product from a local, unzipped .SAFE directory."""
+
     safe_path: str
     safe_format: SafeFormat
     manifest_content: str
@@ -274,18 +349,21 @@ class SafeSentinel1ProductInfo(Sentinel1SLCProductInfo):
 
     @override
     def get_image_reader(self, swath: str, pol: str) -> ImageReader:
+        """Open the measurement raster of `swath`/`pol` from the local SAFE directory."""
         tiff_path = self.safe_format.search(swath, pol, "measurement/")
         tiff_path = os.path.join(self.safe_path, tiff_path)
         return eos.sar.io.open_image(tiff_path)
 
     @override
     def get_xml_annotation(self, swath: str, pol: str) -> str:
+        """Read the annotation xml file of `swath`/`pol` from the local SAFE directory."""
         xml_path = self.safe_format.search(swath, pol, "annotation/")
         xml_path = os.path.join(self.safe_path, xml_path)
         return eos.sar.io.read_xml_file(xml_path)
 
     @override
     def get_xml_calibration(self, swath: str, pol: str) -> str:
+        """Read the calibration xml file of `swath`/`pol` from the local SAFE directory."""
         calibration_xml_path = self.safe_format.search(
             swath, pol, "annotation/calibration/calibration-"
         )
@@ -294,6 +372,7 @@ class SafeSentinel1ProductInfo(Sentinel1SLCProductInfo):
 
     @override
     def get_xml_noise(self, swath: str, pol: str) -> str:
+        """Read the noise xml file of `swath`/`pol` from the local SAFE directory."""
         noise_xml_path = self.safe_format.search(
             swath, pol, "annotation/calibration/noise-"
         )
@@ -302,6 +381,7 @@ class SafeSentinel1ProductInfo(Sentinel1SLCProductInfo):
 
     @override
     def get_manifest(self) -> str:
+        """Return the content of the product's manifest.safe file."""
         return self.manifest_content
 
 
@@ -333,6 +413,7 @@ class CDSEUnzippedSafeSentinel1SLCProductInfo(Sentinel1SLCProductInfo):
 
     @override
     def get_image_reader(self, swath: str, pol: str) -> ImageReader:
+        """Open the measurement raster of `swath`/`pol` from the CDSE S3 bucket."""
         tiff_path = self.safe_format.search(swath, pol, "measurement/")
         tiff_path = os.path.join(self.s3_path, tiff_path)
         with rasterio.Env(
@@ -345,6 +426,7 @@ class CDSEUnzippedSafeSentinel1SLCProductInfo(Sentinel1SLCProductInfo):
 
     @override
     def get_xml_annotation(self, swath: str, pol: str) -> str:
+        """Read the annotation xml file of `swath`/`pol` from the CDSE S3 bucket."""
         xml_path = self.safe_format.search(swath, pol, "annotation/")
         xml_path = os.path.join(self.s3_path, xml_path)
         return eos.sar.io.read_xml_file(
@@ -353,6 +435,7 @@ class CDSEUnzippedSafeSentinel1SLCProductInfo(Sentinel1SLCProductInfo):
 
     @override
     def get_xml_calibration(self, swath: str, pol: str) -> str:
+        """Read the calibration xml file of `swath`/`pol` from the CDSE S3 bucket."""
         calibration_xml_path = self.safe_format.search(
             swath, pol, "annotation/calibration/calibration-"
         )
@@ -363,6 +446,7 @@ class CDSEUnzippedSafeSentinel1SLCProductInfo(Sentinel1SLCProductInfo):
 
     @override
     def get_xml_noise(self, swath: str, pol: str) -> str:
+        """Read the noise xml file of `swath`/`pol` from the CDSE S3 bucket."""
         noise_xml_path = self.safe_format.search(
             swath, pol, "annotation/calibration/noise-"
         )
@@ -373,6 +457,7 @@ class CDSEUnzippedSafeSentinel1SLCProductInfo(Sentinel1SLCProductInfo):
 
     @override
     def get_manifest(self) -> str:
+        """Return the content of the product's manifest.safe file."""
         return self.manifest_content
 
     @staticmethod
@@ -381,6 +466,23 @@ class CDSEUnzippedSafeSentinel1SLCProductInfo(Sentinel1SLCProductInfo):
         s3_session: Any,
         product_id: str,
     ) -> CDSEUnzippedSafeSentinel1SLCProductInfo:
+        """Build a `CDSEUnzippedSafeSentinel1SLCProductInfo` from a product id.
+
+        Looks up the product's S3 path on CDSE via `cdse_backend`.
+
+        Parameters
+        ----------
+        cdse_backend : CDSESentinel1SLCCatalogBackend
+            Backend used to resolve `product_id` to its CDSE S3 path.
+        s3_session : Any
+            boto3 session with credentials to access the CDSE.
+        product_id : str
+            Sentinel-1 SLC product id.
+
+        Returns
+        -------
+        CDSEUnzippedSafeSentinel1SLCProductInfo
+        """
         item = cdse_backend.get_cdse_item(product_id)
         s3_path = f"s3:/{item['S3Path']}"
         return CDSEUnzippedSafeSentinel1SLCProductInfo(product_id, s3_path, s3_session)
@@ -413,6 +515,7 @@ class CDSEUnzippedSafeSentinel1GRDProductInfo(Sentinel1GRDProductInfo):
 
     @override
     def get_image_reader(self, pol: str) -> ImageReader:
+        """Open the measurement raster of `pol` from the CDSE S3 bucket."""
         tiff_path = self.safe_format.search("", pol, "measurement/")
         tiff_path = os.path.join(self.s3_path, tiff_path)
         with rasterio.Env(
@@ -427,6 +530,7 @@ class CDSEUnzippedSafeSentinel1GRDProductInfo(Sentinel1GRDProductInfo):
 
     @override
     def get_xml_annotation(self, pol: str) -> str:
+        """Read the annotation xml file of `pol` from the CDSE S3 bucket."""
         xml_path = self.safe_format.search("", pol, "annotation/")
         xml_path = os.path.join(self.s3_path, xml_path)
         return eos.sar.io.read_xml_file(
@@ -435,6 +539,7 @@ class CDSEUnzippedSafeSentinel1GRDProductInfo(Sentinel1GRDProductInfo):
 
     @override
     def get_xml_calibration(self, pol: str) -> str:
+        """Read the calibration xml file of `pol` from the CDSE S3 bucket."""
         calibration_xml_path = self.safe_format.search(
             "", pol, "annotation/calibration/calibration-"
         )
@@ -445,6 +550,7 @@ class CDSEUnzippedSafeSentinel1GRDProductInfo(Sentinel1GRDProductInfo):
 
     @override
     def get_xml_noise(self, pol: str) -> str:
+        """Read the noise xml file of `pol` from the CDSE S3 bucket."""
         noise_xml_path = self.safe_format.search(
             "", pol, "annotation/calibration/noise-"
         )
@@ -455,6 +561,7 @@ class CDSEUnzippedSafeSentinel1GRDProductInfo(Sentinel1GRDProductInfo):
 
     @override
     def get_manifest(self) -> str:
+        """Return the content of the product's manifest.safe file."""
         return self.manifest_content
 
     @staticmethod
@@ -463,6 +570,23 @@ class CDSEUnzippedSafeSentinel1GRDProductInfo(Sentinel1GRDProductInfo):
         s3_session: Any,
         product_id: str,
     ) -> CDSEUnzippedSafeSentinel1GRDProductInfo:
+        """Build a `CDSEUnzippedSafeSentinel1GRDProductInfo` from a product id.
+
+        Looks up the product's S3 path on CDSE via `cdse_backend`.
+
+        Parameters
+        ----------
+        cdse_backend : CDSESentinel1GRDCatalogBackend
+            Backend used to resolve `product_id` to its CDSE S3 path.
+        s3_session : Any
+            boto3 session with credentials to access the CDSE.
+        product_id : str
+            Sentinel-1 GRD product id.
+
+        Returns
+        -------
+        CDSEUnzippedSafeSentinel1GRDProductInfo
+        """
         item = cdse_backend.get_cdse_item(product_id)
         s3_path = f"s3:/{item['S3Path']}"
         return CDSEUnzippedSafeSentinel1GRDProductInfo(product_id, s3_path, s3_session)

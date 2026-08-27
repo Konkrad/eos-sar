@@ -1,3 +1,8 @@
+"""Retrieve precise/restituted Sentinel-1 orbit state vectors from local .EOF files.
+
+Deprecated: use `eos.products.sentinel1.orbit_catalog` instead.
+"""
+
 import datetime
 import glob
 import io
@@ -42,6 +47,31 @@ def _parse_start_end_date_from_orbit_file(s):
 
 
 def select_orbit_files_from_filelist(files, date, missionid):
+    """
+    Select the orbit files of `missionid` that cover `date` with margin.
+
+    Parameters
+    ----------
+    files : list of str
+        Candidate orbit filenames (.EOF), formatted as
+        S1A_OPER_AUX_POEORB_OPOD_20161102T122427_V20161012T225943_20161014T005943.EOF.
+    date : str
+        Date to cover, formatted as "%Y%m%dT%H%M%S".
+    missionid : str
+        Mission id (e.g. "S1A"), matched case-insensitively against the
+        start of each filename.
+
+    Returns
+    -------
+    list of str
+        Matching filenames, sorted, whose validity interval covers `date`
+        with a safety buffer of a few state vectors on each side.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no orbit file covers `date` for `missionid`.
+    """
     date = _string_to_timestamp(date)
     missionid = missionid.lower()
 
@@ -75,24 +105,84 @@ def select_orbit_files_from_filelist(files, date, missionid):
 def retrieve_new_statevectors_to_slc_burst(
     xml_content, burst: Sentinel1BurstMetadata
 ) -> list[StateVector]:
+    """Retrieve orbit state vectors from an orbit file xml, around a burst.
+
+    Parameters
+    ----------
+    xml_content : str, bytes, or io.BytesIO
+        Content of the orbit (.EOF) xml file.
+    burst : Sentinel1BurstMetadata
+        Burst metadata whose (approximate) time window is used to select
+        the relevant state vectors.
+
+    Returns
+    -------
+    list of StateVector
+        State vectors from the orbit file, in a window centered on the burst.
+    """
     return retrieve_new_statevectors_to_slc_bursts(xml_content, [burst])
 
 
 def retrieve_new_statevectors_to_slc_bursts(
     xml_content: Union[str, bytes, io.BytesIO], bursts: Sequence[Sentinel1BurstMetadata]
 ) -> list[StateVector]:
+    """Retrieve orbit state vectors from an orbit file xml, around a list of bursts.
+
+    Parameters
+    ----------
+    xml_content : str, bytes, or io.BytesIO
+        Content of the orbit (.EOF) xml file.
+    bursts : Sequence[Sentinel1BurstMetadata]
+        Bursts metadata (from a single acquisition/datatake) whose combined
+        (approximate) time window is used to select the relevant state vectors.
+
+    Returns
+    -------
+    list of StateVector
+        State vectors from the orbit file, in a window centered on the bursts.
+    """
     return get_new_list_of_statevectors(xml_content, [b.state_vectors for b in bursts])
 
 
 def retrieve_new_statevectors_to_grd_meta(
     xml_content: Union[str, bytes, io.BytesIO], meta: Sentinel1GRDMetadata
 ) -> list[StateVector]:
+    """Retrieve orbit state vectors from an orbit file xml, around a GRD product.
+
+    Parameters
+    ----------
+    xml_content : str, bytes, or io.BytesIO
+        Content of the orbit (.EOF) xml file.
+    meta : Sentinel1GRDMetadata
+        GRD product metadata whose (approximate) time window is used to
+        select the relevant state vectors.
+
+    Returns
+    -------
+    list of StateVector
+        State vectors from the orbit file, in a window centered on the product.
+    """
     return get_new_list_of_statevectors(xml_content, (meta.state_vectors,))
 
 
 def retrieve_new_statevectors_to_dict_meta(
     xml_content: Union[str, bytes, io.BytesIO], meta: dict[str, Any]
 ) -> list[StateVector]:
+    """Retrieve orbit state vectors from an orbit file xml, around a metadata dict.
+
+    Parameters
+    ----------
+    xml_content : str, bytes, or io.BytesIO
+        Content of the orbit (.EOF) xml file.
+    meta : dict
+        Metadata dict containing a "state_vectors" key, whose (approximate)
+        time window is used to select the relevant state vectors.
+
+    Returns
+    -------
+    list of StateVector
+        State vectors from the orbit file, in a window centered on `meta`.
+    """
     return get_new_list_of_statevectors(xml_content, (meta["state_vectors"],))
 
 
@@ -100,6 +190,26 @@ def get_new_list_of_statevectors(
     xml_content: Union[str, bytes, io.BytesIO],
     statevectors_list: Sequence[Sequence[StateVector]],
 ) -> list[StateVector]:
+    """
+    Extract, from an orbit file xml, the state vectors around a time window.
+
+    The time window used is a 3-minute window centered on the midpoint
+    between the earliest and latest state vector times found across
+    `statevectors_list`.
+
+    Parameters
+    ----------
+    xml_content : str, bytes, or io.BytesIO
+        Content of the orbit (.EOF) xml file.
+    statevectors_list : Sequence[Sequence[StateVector]]
+        Groups of (already known, e.g. restituted) state vectors, used only
+        to determine the time window of interest.
+
+    Returns
+    -------
+    list of StateVector
+        State vectors parsed from the orbit file within the time window.
+    """
     # compute the approximative middle time of the burst/product
     # we will extract all orbit data over a window of 3 minutes centered around this middle
     start = min([state_vectors[0].time for state_vectors in statevectors_list])
@@ -138,6 +248,24 @@ def get_new_list_of_statevectors(
 
 
 def search_valid_orbit_files_from_local_folder(path, product_info, type):
+    """
+    Find the most recent local orbit file of `type` covering `product_info`.
+
+    Parameters
+    ----------
+    path : str
+        Path to a folder containing .EOF orbit files.
+    product_info : tuple
+        (date, missionid), where date is formatted as "%Y%m%dT%H%M%S" and
+        missionid is e.g. "S1A".
+    type : str
+        Orbit type, "poe" (precise) or "res" (restituted).
+
+    Returns
+    -------
+    str or None
+        Path to the most recent matching orbit file, or None if none is found.
+    """
     date, missionid = product_info
 
     files = glob.glob(

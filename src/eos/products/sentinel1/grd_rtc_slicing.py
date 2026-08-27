@@ -1,3 +1,10 @@
+"""Generate and use simulated GRD "slices" to radiometrically-terrain-correct (RTC) rasters.
+
+A slice is a simulated backscatter raster covering a fixed azimuth-time
+window (relative to the ANX) of a relative orbit, used as a reference to
+calibrate/normalize an actual GRD raster via `calibrate`.
+"""
+
 from __future__ import annotations
 
 import abc
@@ -52,6 +59,8 @@ SLICE_BASE_PROFILE = {
 
 @dataclass
 class CannotFindOrGenerateSlice(Exception):
+    """Raised when a slice is neither in storage nor generatable (no generator set)."""
+
     slice_spec: SliceSpec
 
 
@@ -85,6 +94,7 @@ class SlicingSpec:
 
     @property
     def seconds_per_slice(self) -> float:
+        """Duration of a slice, in seconds."""
         return self.milliseconds_per_slice / 1000
 
     def compute_approx_start_anx(self, slice_id: int) -> float:
@@ -96,10 +106,12 @@ class SlicingSpec:
         return self.compute_approx_start_anx(slice_id) + self.seconds_per_slice / 2
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize this spec to a plain, JSON-friendly dict."""
         return dataclasses.asdict(self)
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> SlicingSpec:
+        """Build a `SlicingSpec` from a dict produced by `to_dict`."""
         return SlicingSpec(
             milliseconds_per_slice=d["milliseconds_per_slice"],
             row_margin=d["row_margin"],
@@ -124,10 +136,12 @@ class SliceSpec:
     """
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize this spec to a plain, JSON-friendly dict."""
         return dataclasses.asdict(self)
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> SliceSpec:
+        """Build a `SliceSpec` from a dict produced by `to_dict`."""
         return SliceSpec(
             slicing_spec=SlicingSpec.from_dict(d["slicing_spec"]),
             relative_orbit_number=d["relative_orbit_number"],
@@ -203,6 +217,8 @@ class SliceGenerationOptions:
 
 
 class SliceGenerator(abc.ABC):
+    """Base class for generators that simulate a slice on-demand."""
+
     @abc.abstractmethod
     def generate_slice(
         self, slice_spec: SliceSpec
@@ -212,6 +228,8 @@ class SliceGenerator(abc.ABC):
 
 @dataclass(frozen=True)
 class SliceStorage(abc.ABC):
+    """Base class for storage backends persisting/loading generated slices."""
+
     @abc.abstractmethod
     def load_slice(self, slice_spec: SliceSpec) -> Optional[LivingSlice]:
         """
@@ -272,6 +290,7 @@ class LocalSliceStorage(SliceStorage):
 
     @override
     def load_slice(self, slice_spec: SliceSpec) -> Optional[LivingSlice]:
+        """Load a slice previously stored in `directory`, if it exists."""
         fmt = _formatted_slicespec(slice_spec, self.filename_prefix)
         if not io.exists(f"{self.directory}/{fmt}.tif"):
             return None
@@ -290,6 +309,7 @@ class LocalSliceStorage(SliceStorage):
         meta: Sentinel1GRDMetadata,
         array: NDArray[np.float32],
     ) -> LivingSlice:
+        """Write the given slice's metadata and raster to `directory`."""
         fmt = _formatted_slicespec(slice_spec, self.filename_prefix)
 
         with open(f"{self.directory}/{fmt}-meta.json", "w") as dst:
@@ -309,6 +329,8 @@ class LocalSliceStorage(SliceStorage):
 
 @dataclass(frozen=True)
 class S3SliceStorage(SliceStorage):
+    """Slice storage on a given S3 bucket."""
+
     s3_client: Any
     s3_session: Any
     bucket: str
@@ -316,6 +338,7 @@ class S3SliceStorage(SliceStorage):
 
     @override
     def load_slice(self, slice_spec: SliceSpec) -> Optional[LivingSlice]:
+        """Load a slice previously stored in the S3 bucket, if it exists."""
         fmt = _formatted_slicespec(slice_spec, self.key_prefix)
         if not io.exists(f"s3://{self.bucket}/{fmt}.tif", self.s3_client):
             return None
@@ -336,6 +359,7 @@ class S3SliceStorage(SliceStorage):
         meta: Sentinel1GRDMetadata,
         array: NDArray[np.float32],
     ) -> LivingSlice:
+        """Write the given slice's metadata and raster to the S3 bucket."""
         fmt = _formatted_slicespec(slice_spec, self.key_prefix)
 
         content = _slice_meta_to_json(meta, slice_spec)
@@ -368,7 +392,8 @@ class S3SliceStorage(SliceStorage):
         return LivingSlice(meta=meta, reader=src)
 
 
-class CannotFindReferenceMetadataException(Exception): ...
+class CannotFindReferenceMetadataException(Exception):
+    """Raised when no reference GRD metadata could be found for a slice."""
 
 
 @dataclass(frozen=True)
@@ -385,6 +410,7 @@ class SpecificProductSliceGenerator(SliceGenerator):
     def generate_slice(
         self, slice_spec: SliceSpec
     ) -> tuple[Sentinel1GRDMetadata, NDArray[np.float32]]:
+        """Simulate the slice by projecting/simulating from `product_info`'s geometry."""
         meta, proj_model = _make_proj_model(
             [self.product_info], orbit_catalog_backend=None
         )
@@ -536,6 +562,38 @@ def calibrate(
     array: NDArray[np.float32],
     debug: bool = False,
 ) -> None:
+    """
+    Radiometrically-terrain-correct (RTC) `array` in-place using simulated slices.
+
+    For each slice overlapping `roi` (fetched or generated via
+    `slice_provider`), the slice is roughly registered onto `array` with a
+    single-pixel translation, resampled, and used to normalize the
+    corresponding rows of `array` (see `eos.sar.rtc.normalize`). Every row of
+    `array` is expected to be covered by at least one slice.
+
+    Parameters
+    ----------
+    slice_provider : SliceProvider
+        Provider used to fetch or generate the slices needed to cover `roi`.
+    slicing_spec : SlicingSpec
+        Temporal slicing grid to use (relative to the product's ANX time).
+    meta : Sentinel1GRDMetadata
+        Metadata of the product being calibrated.
+    proj_model : Sentinel1GRDModel
+        Sensor model of the product being calibrated.
+    roi : eos.sar.roi.Roi
+        Region of interest of `array` within the product.
+    array : ndarray of float32
+        Raster to normalize in-place. Its shape must match `roi`.
+    debug : bool, optional
+        If True, run extra consistency assertions on which rows were
+        covered by a slice. The default is False.
+
+    Raises
+    ------
+    CannotFindOrGenerateSlice
+        If a needed slice could not be fetched or generated.
+    """
     assert array.shape == roi.get_shape()
 
     relative_orbit_number = meta.relative_orbit_number

@@ -21,6 +21,8 @@ T = TypeVar("T", np.float32, np.complex64)
 
 @dataclass(frozen=True)
 class Interpolation:
+    """Wraps an OpenCV interpolation flag for use with `Orthorectifier.apply`."""
+
     cv2_flag: int
 
 
@@ -32,7 +34,7 @@ LanczosInterpolation = Interpolation(cv2.INTER_LANCZOS4)
 
 
 class AlignmentError(Exception):
-    pass
+    """Raised when the requested grid alignment is not a multiple of the resolution."""
 
 
 def _compute_transform_shape(crs, res, bbox, align=None):
@@ -242,6 +244,41 @@ class Orthorectifier:
         dem: eos.dem.DEM,
         previous_orthorectifier: Optional[Orthorectifier] = None,
     ) -> Orthorectifier:
+        """
+        Build an Orthorectifier for an explicitly given destination CRS/transform/shape.
+
+        Unlike `from_roi`, the destination geometry is provided directly instead
+        of being derived from the roi's approximate bounding box, which avoids
+        the (sometimes imprecise) 4326 bounding box estimation.
+
+        Parameters
+        ----------
+        proj_model : eos.sar.model.SensorModel
+            Sensor model used to project DEM points into radar geometry.
+        roi : eos.sar.roi.Roi
+            Region of interest in the sensor model, used to translate radar
+            row/col to the local frame of the roi.
+        crs : rasterio.CRS
+            Destination CRS.
+        transform : rasterio.Affine
+            Destination affine transform.
+        shape : tuple of int
+            Destination (height, width) shape.
+        dem : eos.dem.DEM
+            DEM covering the destination geometry, used to build the
+            coordinate maps (subset internally unless `previous_orthorectifier`
+            already provides a matching subset).
+        previous_orthorectifier : Orthorectifier, optional
+            If given and its crs/transform/shape match the requested ones,
+            its precomputed DEM subset is reused instead of recomputing it.
+            The default is None.
+
+        Returns
+        -------
+        Orthorectifier
+            Orthorectifier mapping the destination grid to the sensor's radar
+            geometry.
+        """
         if previous_orthorectifier and previous_orthorectifier._deminfo:
             assert previous_orthorectifier.crs == crs
             assert previous_orthorectifier.transform == transform
@@ -261,6 +298,28 @@ class Orthorectifier:
         return ortho
 
     def apply(self, raster: NDArray[T], interpolation: Interpolation) -> NDArray[T]:
+        """
+        Orthorectify a raster using the precomputed coordinate maps.
+
+        The raster must be in the same radar geometry (sensor model + roi)
+        that was used to build this Orthorectifier.
+
+        Parameters
+        ----------
+        raster : ndarray (complex64 or float32)
+            Raster in radar geometry to warp onto this Orthorectifier's grid.
+            Complex rasters are handled by orthorectifying the real and
+            imaginary parts separately.
+        interpolation : Interpolation
+            Interpolation method used for the resampling.
+
+        Returns
+        -------
+        ndarray
+            Orthorectified raster, with shape `self.shape`, in the CRS and
+            transform of this Orthorectifier. Pixels outside the source
+            raster are set to NaN.
+        """
         if raster.dtype == np.complex64:
             real_out = self.apply(np.real(raster), interpolation)
             imag_out = self.apply(np.imag(raster), interpolation)

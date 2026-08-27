@@ -43,6 +43,8 @@ ProductProvider = Callable[[str], Sentinel1SLCProductInfo]
 
 
 class ProductProviderBase(ABC):
+    """Callable interface fetching a `Sentinel1SLCProductInfo` given a product id."""
+
     @abstractmethod
     def __call__(self, product_id: str) -> Sentinel1SLCProductInfo:
         """
@@ -53,6 +55,8 @@ class ProductProviderBase(ABC):
 
 @dataclass(frozen=True)
 class CDSEProductProvider(ProductProviderBase):
+    """`ProductProviderBase` fetching Sentinel-1 products from the Copernicus Data Space Ecosystem (CDSE)."""
+
     cdse_access_key_id: str
     cdse_secret_access_key: str
 
@@ -77,6 +81,23 @@ class CDSEProductProvider(ProductProviderBase):
 def get_bsids_for_product(
     product_provider: ProductProvider, polarization: str, product_id: str
 ) -> list[str]:
+    """
+    List the burst ids (bsids) of a Sentinel-1 product across all three IW subswaths.
+
+    Parameters
+    ----------
+    product_provider : ProductProvider
+        Callable used to fetch the product by id.
+    polarization : str
+        Polarization channel to read burst metadata from.
+    product_id : str
+        Id of the product to inspect.
+
+    Returns
+    -------
+    list[str]
+        Burst ids across IW1, IW2, IW3.
+    """
     product = product_provider(product_id)
     xmls = [
         product.get_xml_annotation(swath=swath, pol=polarization)
@@ -93,6 +114,28 @@ def get_bsids_for_product(
 def get_bsids_for_products(
     product_provider: ProductProvider, polarization: str, product_ids: list[str]
 ) -> tuple[dict[str, list[str]], dict[str, Exception]]:
+    """
+    List the burst ids of several Sentinel-1 products in parallel (via `get_bsids_for_product`).
+
+    Uses a process pool (10 workers) so that a failure fetching one
+    product does not stop the others.
+
+    Parameters
+    ----------
+    product_provider : ProductProvider
+        Callable used to fetch each product by id.
+    polarization : str
+        Polarization channel to read burst metadata from.
+    product_ids : list[str]
+        Ids of the products to inspect.
+
+    Returns
+    -------
+    bsids : dict[str, list[str]]
+        Burst ids for each successfully processed product id.
+    errors : dict[str, Exception]
+        Exception raised for each product id that failed.
+    """
     get = partial(get_bsids_for_product, product_provider, polarization)
     bsids: dict[str, list[str]] = {}
     errors: dict[str, Exception] = {}
@@ -116,6 +159,30 @@ def get_bsids_for_products(
 def remove_weird_products(
     product_provider: ProductProvider, product_ids: list[list[str]], polarization: str
 ) -> list[list[str]]:
+    """
+    Discard datatakes whose products fail to fetch or have duplicated burst ids.
+
+    Products are grouped by acquisition datatake (parsed from the product
+    id). A datatake is dropped entirely if any of its products fails to
+    fetch, or if the burst ids across its products are not all distinct
+    (which would make debursting/mosaicking ambiguous).
+
+    Parameters
+    ----------
+    product_provider : ProductProvider
+        Callable used to fetch each product by id.
+    product_ids : list[list[str]]
+        Product ids grouped by date (one list per date, potentially
+        several products per date/datatake).
+    polarization : str
+        Polarization channel to read burst metadata from.
+
+    Returns
+    -------
+    list[list[str]]
+        `product_ids`, with dates whose datatake failed validation removed.
+    """
+
     def pid2datatake(pid: str) -> str:
         idx = len("S1A_IW_SLC__1SDV_20211202T173302_20211202T173329_040833_")
         return pid[idx : idx + 6]
@@ -160,40 +227,53 @@ def remove_weird_products(
 
 
 class BackendFactory(ABC):
+    """Builds the catalog/orbit/product backends needed to run a `main`/`main_ovl` pipeline."""
+
     # Note: We could break this into three different factories if needed
 
     @abstractmethod
-    def create_slc_catalog_backend(self) -> s1_catalog.Sentinel1SLCCatalogBackend: ...
+    def create_slc_catalog_backend(self) -> s1_catalog.Sentinel1SLCCatalogBackend:
+        """Build the Sentinel-1 SLC catalog backend used to search for products."""
+        ...
 
     @abstractmethod
     def create_orbit_catalog_backend(
         self,
-    ) -> orbit_catalog.Sentinel1OrbitCatalogBackend: ...
+    ) -> orbit_catalog.Sentinel1OrbitCatalogBackend:
+        """Build the orbit catalog backend used to fetch orbit files."""
+        ...
 
     @abstractmethod
-    def create_product_provider(self) -> ProductProvider: ...
+    def create_product_provider(self) -> ProductProvider:
+        """Build the callable used to fetch a Sentinel-1 product by id."""
+        ...
 
 
 @dataclass(frozen=True)
 class CDSEBackendFactory(BackendFactory):
+    """`BackendFactory` using the Copernicus Data Space Ecosystem (CDSE) for all backends."""
+
     cdse_access_key_id: str
     cdse_secret_access_key: str
     cdse_username: str
     cdse_password: str
 
     def create_slc_catalog_backend(self) -> s1_catalog.Sentinel1SLCCatalogBackend:
+        """Build a `CDSESentinel1SLCCatalogBackend`."""
         backend = s1_catalog.CDSESentinel1SLCCatalogBackend()
         return backend
 
     def create_orbit_catalog_backend(
         self,
     ) -> orbit_catalog.Sentinel1OrbitCatalogBackend:
+        """Build a `CDSESentinel1OrbitCatalogBackend`, authenticated with `cdse_username`/`cdse_password`."""
         backend = orbit_catalog.CDSESentinel1OrbitCatalogBackend(
             self.cdse_username, self.cdse_password
         )
         return backend
 
     def create_product_provider(self) -> ProductProvider:
+        """Build a `CDSEProductProvider`, authenticated with the CDSE access key pair."""
         return CDSEProductProvider(self.cdse_access_key_id, self.cdse_secret_access_key)
 
 
@@ -221,6 +301,60 @@ def main(
     *,
     backend_factory: BackendFactory,
 ):
+    """
+    End-to-end Sentinel-1 time series preparation: query, filter, and process a stack of SLCs.
+
+    Queries the SLC catalog for products matching `geometry`/`orbit`/date
+    range/`polarization`, discards datatakes with fetch errors or
+    duplicated bursts (`remove_weird_products`, cached), then runs
+    `run_ts_on_prods` to build a coregistered, calibrated crop stack.
+
+    Parameters
+    ----------
+    dstdir : str
+        Output directory (see `inout.DirectoryBuilder`).
+    geometry : shapely.Geometry or str
+        Area of interest, as a shapely geometry or its WKT string.
+    orbit : int
+        Relative orbit number to query.
+    startdate, enddate : datetime.datetime
+        Date range to query.
+    orbit_type : OrbitPrecision, optional
+        Orbit file precision to require. Defaults to "orbpoe".
+    polarization : str, optional
+        Polarization channel to process. Defaults to "vv".
+    calibrate : str, optional
+        Radiometric calibration to apply. Defaults to "sigma".
+    get_complex : bool, optional
+        Whether to read the data as complex. Defaults to True.
+    bistatic, apd, intra_pulse, alt_fm_mismatch : bool, optional
+        Which geometric corrections to apply during registration. All
+        default to True.
+    dem_sampling_ratio : float, optional
+        Fraction of DEM points to sample for registration. Defaults to 1.0.
+    primary_id : int, optional
+        Index of the primary (reference) date. Defaults to 0.
+    ncpu : int, optional
+        Number of worker threads used to process secondary dates in
+        parallel. Defaults to 16.
+    last_n_prods : int, optional
+        If given, only process the last `last_n_prods` dates.
+    roi_provider : RoiProvider, optional
+        Provider used to determine the region of interest to crop.
+        Defaults to a `GeometryRoiProvider` built from `geometry`.
+    dem_source : eos.dem.DEMSource, optional
+        DEM source. Defaults to `eos.dem.get_any_source()`.
+    cache : Cache, optional
+        Cache used for catalog queries and `remove_weird_products`.
+        Defaults to no caching.
+    backend_factory : BackendFactory
+        Factory building the catalog/orbit/product backends.
+
+    Returns
+    -------
+    list[Pipeline]
+        Processed pipelines (one per retained date), sorted by date.
+    """
     if isinstance(geometry, str):
         geometry = shapely.wkt.loads(geometry)
 
@@ -293,6 +427,28 @@ def get_orbits(
     orbit_type: OrbitPrecision,
     cache: Cache,
 ) -> orbit_catalog.Sentinel1OrbitCatalogResult:
+    """
+    Fetch orbit files for a set of Sentinel-1 products.
+
+    Parameters
+    ----------
+    backend : orbit_catalog.Sentinel1OrbitCatalogBackend
+        Backend used to search for orbit files.
+    product_ids : list[list[str]]
+        Product ids to fetch orbits for (grouped by date, but flattened
+        for the query).
+    orbit_type : OrbitPrecision
+        Orbit precision to require: `True` for best effort (precise with
+        fallback to restituted), `"orbpoe"` for precise only, `"orbres"`
+        for restituted only, `False`/None for no orbit files.
+    cache : Cache
+        Cache used for the orbit catalog query.
+
+    Returns
+    -------
+    orbit_catalog.Sentinel1OrbitCatalogResult
+        Query result, usable to get the orbit file for a given product id.
+    """
     assert orbit_type in (True, False, None, "orbpoe", "orbres")
     orbit_quality: list[orbit_catalog.OrbitFileType] = {  # type: ignore
         True: orbit_catalog.BestEffort,
@@ -329,6 +485,56 @@ def run_ts_on_prods(
     cache: Cache,
     orbit_backend: orbit_catalog.Sentinel1OrbitCatalogBackend,
 ) -> list[Pipeline]:
+    """
+    Process a stack of Sentinel-1 SLC products into a coregistered, calibrated, flattened crop stack.
+
+    Fetches orbits, then runs the primary date's `PrimaryPipeline`
+    (cropping, DEM fetch, registration) followed by each secondary date's
+    `SecondaryPipeline` (registration onto the primary, resampling,
+    flattening), in parallel if `ncpu > 1`. Processing parameters and the
+    resulting product ids are saved to `dstdir`'s `proc.json`.
+
+    Parameters
+    ----------
+    dstdir : str
+        Output directory (see `inout.DirectoryBuilder`).
+    roi_provider : RoiProvider
+        Provider used to determine the region of interest to crop.
+    product_ids : list[list[str]]
+        Product ids for each date (one list per date).
+    primary_id : int, optional
+        Index of the primary (reference) date. Defaults to 0.
+    orbit_type : OrbitPrecision, optional
+        Orbit file precision to require. Defaults to "orbpoe".
+    polarization : str, optional
+        Polarization channel to process. Defaults to "vv".
+    calibrate : str, optional
+        Radiometric calibration to apply. Defaults to "sigma".
+    get_complex : bool, optional
+        Whether to read the data as complex. Defaults to True.
+    bistatic, apd, intra_pulse, alt_fm_mismatch : bool, optional
+        Which geometric corrections to apply during registration. All
+        default to True.
+    dem_sampling_ratio : float, optional
+        Fraction of DEM points to sample for registration. Defaults to 1.0.
+    ncpu : int, optional
+        Number of worker threads used to process secondary dates in
+        parallel (1 disables parallelism). Defaults to 16.
+    dem_source : eos.dem.DEMSource, optional
+        DEM source. Defaults to `eos.dem.get_any_source()`.
+    product_provider : ProductProvider
+        Callable used to fetch each product by id.
+    cache : Cache
+        Cache used for the orbit catalog query.
+    orbit_backend : orbit_catalog.Sentinel1OrbitCatalogBackend
+        Backend used to fetch orbit files.
+
+    Returns
+    -------
+    list[Pipeline]
+        Processed pipelines (the primary plus successfully processed
+        secondaries), sorted by date.
+    """
     os.makedirs(dstdir, exist_ok=True)
     directory_builder = inout.DirectoryBuilder(dstdir)
 

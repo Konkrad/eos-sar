@@ -102,12 +102,16 @@ def open_image_fsspec(uri: str, **extra_args: Any) -> ImageReader:
 
 
 class H5LoaderBase(ABC):
+    """Abstract base class for context-manager style loaders of `h5py.File` objects."""
+
     @abstractmethod
     def open(self) -> h5py.File:
+        """Open and return the underlying `h5py.File`."""
         pass
 
     @abstractmethod
     def close(self):
+        """Close the underlying `h5py.File` (and any resources it depends on)."""
         pass
 
     def __enter__(self):
@@ -127,11 +131,13 @@ class LocalH5Loader(H5LoaderBase):
     h5_file: Optional[h5py.File] = field(default=None, init=False, repr=False)
 
     def open(self) -> h5py.File:
+        """Open and return the local `h5py.File` at `self.path`."""
         # Standard local opening
         self.h5_file = h5py.File(self.path, "r")
         return self.h5_file
 
     def close(self):
+        """Close the underlying `h5py.File`, if open."""
         if self.h5_file:
             self.h5_file.close()
             self.h5_file = None
@@ -163,6 +169,7 @@ class RemoteH5Loader(H5LoaderBase):
     h5_file: Optional[h5py.File] = field(default=None, init=False, repr=False)
 
     def open(self) -> h5py.File:
+        """Open the remote (s3 or http) file via fsspec and return the resulting `h5py.File`."""
         if self.url.startswith("s3://"):
             cache_type_str = "default_cache_type"
             block_size_str = "default_block_size"
@@ -190,6 +197,7 @@ class RemoteH5Loader(H5LoaderBase):
         return self.h5_file
 
     def close(self):
+        """Close the underlying `h5py.File` and the backing fsspec file, if open."""
         if self.h5_file:
             self.h5_file.close()
             self.h5_file = None
@@ -206,8 +214,8 @@ def read_file_as_str(
 
     Parameters
     ----------
-    xml_path : str
-        path of the xml file.
+    path : str
+        path of the file.
     s3_client : boto3.Client
         boto3 s3 client with read permission to the resource
     requester_pays : bool, optional
@@ -318,6 +326,28 @@ def read_windows(
 def read_hdf5_window(
     dataset: h5py.Dataset, roi: Roi, get_complex: bool = True, boundless: bool = True
 ) -> NDArray[Union[np.float32, np.complex64]]:
+    """Read a window from a 2D HDF5 dataset, optionally allowing the window to extend past the dataset bounds.
+
+    Parameters
+    ----------
+    dataset : h5py.Dataset
+        2D HDF5 dataset to read from.
+    roi : eos.sar.roi.Roi
+        Window to read, in the dataset's row/col frame.
+    get_complex : bool, optional
+        If True, the complex data is returned. Otherwise, only the amplitude
+        is returned. The default is True.
+    boundless : bool, optional
+        If True, the output has the shape of `roi`, with entries outside the
+        dataset bounds filled with NaN. If False, the output is cropped to
+        the intersection of `roi` with the dataset (or an empty (0, 0) array
+        if there is no intersection). The default is True.
+
+    Returns
+    -------
+    ndarray (np.complex64 or np.float32)
+        The read window.
+    """
     assert len(dataset.shape) == 2, "Only 2D datasets are supported"
     clipped_roi = roi.make_valid(dataset.shape)
 

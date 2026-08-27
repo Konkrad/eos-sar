@@ -15,6 +15,8 @@ from eos.sar.model import SensorModel
 
 @dataclass(frozen=True)
 class Interpolation:
+    """Wraps an OpenCV interpolation flag for use with `apply_affine`/`SarResample.resample`."""
+
     cv2_flag: int
 
 
@@ -231,6 +233,7 @@ def orbital_registration(
 
 
 def translation_matrix(col, row):
+    """Return the 3x3 homogeneous affine matrix translating by (row, col) (row along axis 0, col along axis 1)."""
     T = np.eye(3)
     T[0, 2] = row
     T[1, 2] = col
@@ -304,12 +307,37 @@ class SarResample(abc.ABC):
 
     @abc.abstractmethod
     def deramp(self, src_array):
+        """Deramp a complex SAR image on its regular source grid, estimating and removing a phase for each point.
+
+        Parameters
+        ----------
+        src_array : ndarray
+            Complex source image, on the regular source grid.
+
+        Returns
+        -------
+        ndarray
+            Deramped image, ready to be resampled.
+        """
         # The deramping should work on the regular src grid
         # and estimate a phase for each point in this grid
         pass
 
     @abc.abstractmethod
     def reramp(self, dst_array):
+        """Reramp a resampled complex SAR image, restoring the phase removed by `deramp` on the irregular destination grid.
+
+        Parameters
+        ----------
+        dst_array : ndarray
+            Resampled (deramped) destination image, sampled at the
+            irregular grid given by matrix * dst_grid.
+
+        Returns
+        -------
+        ndarray
+            Reramped image.
+        """
         # The reramping should work on the irregular matrix*dst_grid
         # and should yield a phase for each point in this grid
         pass

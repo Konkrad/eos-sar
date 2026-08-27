@@ -1,3 +1,5 @@
+"""Warp, resample, and deburst Sentinel-1 SLC bursts into a contiguous crop."""
+
 import numpy as np
 
 from eos.products.sentinel1 import burst_resamp

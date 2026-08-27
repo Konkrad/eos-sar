@@ -7,6 +7,7 @@ from teosar.utils import OvlIfg
 
 
 def to_ovl_arr(array, overlap_roi_info, osid):
+    """Place `array` into the overlap output raster for `osid` (see `eos.sar.utils.write_array`)."""
     return write_array(
         array,
         overlap_roi_info.all_write_rois[osid],
@@ -15,6 +16,29 @@ def to_ovl_arr(array, overlap_roi_info, osid):
 
 
 def get_f_dop(resampler_per_osid, overlap_roi_info_per_swath, osid):
+    """
+    Compute the Doppler centroid frequency raster at a burst overlap region.
+
+    Evaluated on the resampled (secondary-to-primary) grid using the
+    resampler's Doppler rate/centroid model, then written to the overlap
+    output raster for `osid`.
+
+    Parameters
+    ----------
+    resampler_per_osid : dict
+        Resampler (exposing `get_doppler_params_gridded`, `dst_shape`,
+        `src_roi_in_burst`, `matrix`) for each osid.
+    overlap_roi_info_per_swath : dict
+        `OverlapRoiInfo`-like object per swath, used to place the result
+        into the overlap output raster.
+    osid : Osid
+        Overlap spatial id to compute the Doppler centroid for.
+
+    Returns
+    -------
+    ndarray
+        Doppler centroid frequency raster for the `osid` overlap region.
+    """
     # also save the doppler frequency at the overlap
     # Now osid corresponds to a single swath
     swath = osid.bsid().split("_")[1].lower()
@@ -34,6 +58,20 @@ def get_f_dop(resampler_per_osid, overlap_roi_info_per_swath, osid):
 
 
 def normalize_cmpx_values(cmpx_values):
+    """
+    Normalize complex values to unit amplitude, leaving zero-amplitude values as zero.
+
+    Parameters
+    ----------
+    cmpx_values : ndarray of complex
+        Complex values to normalize.
+
+    Returns
+    -------
+    ndarray of complex
+        `cmpx_values` divided by their amplitude (unit modulus), except
+        entries with zero amplitude, which are left at zero.
+    """
     amp = np.abs(cmpx_values)
     non_zero_mask = amp != 0
     normalized = np.copy(cmpx_values)
@@ -59,6 +97,40 @@ def main(
     product_provider: tsinsar.ProductProvider,
     orbit_backend: orbit_catalog.Sentinel1OrbitCatalogBackend,
 ):
+    """
+    Process two Sentinel-1 dates into burst-overlap interferograms with an ESD correction.
+
+    Runs `tsinsar.main_ovl` to prepare the primary/secondary burst-overlap
+    pipelines, then for each burst intersection of interest computes the
+    forward/backward overlap interferogram, estimates an azimuth pixel
+    shift via Enhanced Spectral Diversity (ESD, using the difference of
+    Doppler centroid frequencies between the two overlapping bursts), and
+    writes the topography-corrected interferograms (before and after ESD
+    correction) plus the estimated per-burst-intersection pixel shifts to
+    `dstdir`.
+
+    Only supports exactly two dates in `product_ids_per_date`.
+
+    Parameters
+    ----------
+    dstdir : str
+        Output directory (see `inout.OvlDirectoryBuilder`).
+    product_ids_per_date : Sequence
+        Sentinel-1 product ids for each of the two dates.
+    orbit_type, polarization, calibrate, get_complex, bistatic, apd,
+    intra_pulse, alt_fm_mismatch, dem_sampling_ratio, primary_id,
+    osids_of_interest
+        Passed through to `tsinsar.main_ovl`.
+    product_provider : tsinsar.ProductProvider
+        Callable used to fetch Sentinel-1 products by id.
+    orbit_backend : eos.products.sentinel1.orbit_catalog.Sentinel1OrbitCatalogBackend
+        Backend used to fetch orbit files.
+
+    Returns
+    -------
+    None
+        Interferograms and ESD pixel shifts are written to `dstdir`.
+    """
     pipelines = tsinsar.main_ovl(
         dstdir,
         product_ids_per_date,

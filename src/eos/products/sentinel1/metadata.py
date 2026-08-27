@@ -34,6 +34,8 @@ T_orb2 = T_beam * N_bursts_per_cycle / N_orbits_per_cycle
 
 @dataclass(frozen=True)
 class Sentinel1BurstMetadata:
+    """Metadata of a single Sentinel-1 SLC burst, as extracted from its annotation xml."""
+
     mission_id: str
     absolute_orbit_number: int
     relative_orbit_number: int
@@ -72,19 +74,23 @@ class Sentinel1BurstMetadata:
 
     @property
     def radar_frequency(self) -> float:
+        """Radar carrier frequency, in Hz."""
         return const.LIGHT_SPEED_M_PER_SEC / self.wave_length
 
     @property
     def range_pixel_spacing(self) -> float:
+        """Slant range pixel spacing, in meters."""
         return const.LIGHT_SPEED_M_PER_SEC / (2 * self.range_frequency)
 
     @property
     def azimuth_time_interval(self) -> float:
+        """Azimuth time interval between two lines, in seconds."""
         return 1 / self.azimuth_frequency
 
     def with_new_state_vectors(
         self, state_vectors: list[StateVector], state_vectors_origin: str
     ) -> Sentinel1BurstMetadata:
+        """Return a copy of this metadata with `state_vectors` substituted in."""
         d = self.__dict__.copy()
         del d["state_vectors"]
         del d["state_vectors_origin"]
@@ -102,12 +108,14 @@ class Sentinel1BurstMetadata:
         return self.__dict__[name]
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize this metadata to a plain, JSON-friendly dict."""
         d = self.__dict__.copy()
         d["state_vectors"] = [s.to_dict() for s in self.state_vectors]
         return d
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> Sentinel1BurstMetadata:
+        """Build a `Sentinel1BurstMetadata` from a dict produced by `to_dict`."""
         if "azimuth_pixel_spacing" not in d:
             raise KeyError(
                 "Missing key `azimuth_pixel_spacing` from provided dict, maybe it comes from eos-sar<0.44.0?"
@@ -120,6 +128,8 @@ class Sentinel1BurstMetadata:
 
 @dataclass(frozen=True)
 class Sentinel1GRDMetadata:
+    """Metadata of a Sentinel-1 GRD product, as extracted from its annotation xml."""
+
     mission_id: str
     absolute_orbit_number: int
     relative_orbit_number: int
@@ -149,11 +159,13 @@ class Sentinel1GRDMetadata:
 
     @property
     def radar_frequency(self) -> float:
+        """Radar carrier frequency, in Hz."""
         return const.LIGHT_SPEED_M_PER_SEC / self.wave_length
 
     def with_new_state_vectors(
         self, state_vectors: list[StateVector], state_vectors_origin: str
     ) -> Sentinel1GRDMetadata:
+        """Return a copy of this metadata with `state_vectors` substituted in."""
         d = self.__dict__.copy()
         del d["state_vectors"]
         del d["state_vectors_origin"]
@@ -171,6 +183,7 @@ class Sentinel1GRDMetadata:
         return self.__dict__[name]
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize this metadata to a plain, JSON-friendly dict."""
         d = self.__dict__.copy()
         d["state_vectors"] = [s.to_dict() for s in self.state_vectors]
         d["srgr"] = self.srgr.to_dict()
@@ -178,6 +191,7 @@ class Sentinel1GRDMetadata:
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> Sentinel1GRDMetadata:
+        """Build a `Sentinel1GRDMetadata` from a dict produced by `to_dict`."""
         if "azimuth_pixel_spacing" not in d:
             raise KeyError(
                 "Missing key `azimuth_pixel_spacing` from provided dict, maybe it comes from eos-sar<0.44.0?"
@@ -194,6 +208,25 @@ def relative_orbit_number_from_absolute(
     absolute_orbit_number: int,
     acquisition_date: Optional[datetime.datetime] = None,
 ) -> int:
+    """
+    Compute the relative orbit number from the absolute orbit number.
+
+    Parameters
+    ----------
+    mission_id : str
+        Mission id, one of "S1A", "S1B", "S1C", "S1D".
+    absolute_orbit_number : int
+        Absolute orbit number.
+    acquisition_date : datetime.datetime, optional
+        Acquisition date, required for "S1C" during its 2026 orbital
+        reconfiguration (see inline comment) to pick the right reference
+        offset. The default is None.
+
+    Returns
+    -------
+    int
+        Relative orbit number.
+    """
     if mission_id == "S1A":
         return (absolute_orbit_number - 73) % 175 + 1
     elif mission_id == "S1B":
@@ -387,7 +420,7 @@ def compute_burst_id(burst, first_burst_xml):
     Parameters
     ----------
     burst: dict
-       Metadata of the burst.
+        Metadata of the burst.
 
     Returns
     -------
@@ -706,6 +739,18 @@ def extract_grd_metadata(xml: Union[str, bytes]) -> Sentinel1GRDMetadata:
 def assemble_multiple_products_into_metas(
     metas_per_product: list[list[Sentinel1BurstMetadata]],
 ) -> list[Sentinel1BurstMetadata]:
+    """Flatten per-product lists of burst metadata into a single list.
+
+    Parameters
+    ----------
+    metas_per_product : list of list of Sentinel1BurstMetadata
+        Burst metadata, grouped by product.
+
+    Returns
+    -------
+    list of Sentinel1BurstMetadata
+        All bursts from all products, concatenated.
+    """
     bursts = list(sum(metas_per_product, []))
     return bursts
 
@@ -713,6 +758,23 @@ def assemble_multiple_products_into_metas(
 def assemble_multiple_grd_products_into_meta(
     metas: Sequence[Sentinel1GRDMetadata],
 ) -> Sentinel1GRDMetadata:
+    """Combine the metadata of consecutive GRD products (slices) into one.
+
+    Merges state vectors, SRGR coefficients and approximate geometry, and
+    stacks the products' dimensions (width is the max, height is the sum)
+    to describe the single mosaic obtained by assembling all products.
+
+    Parameters
+    ----------
+    metas : Sequence[Sentinel1GRDMetadata]
+        Metadata of the GRD products to combine, from a single
+        acquisition/datatake.
+
+    Returns
+    -------
+    Sentinel1GRDMetadata
+        Combined metadata of the assembled mosaic.
+    """
     # make sure the product are ordered by time
     metas = sorted(metas, key=lambda m: m.image_start)
 

@@ -37,11 +37,19 @@ Polarization = Literal["VV", "VH", "HV", "HH"]
 
 @dataclass(frozen=True)
 class ProductsAreFromDifferentDatatakes(Exception):
+    """Raised when the input GRD products do not all belong to the same datatake."""
+
     datatakes: set[str]
 
 
 @dataclass(frozen=True)
 class Params:
+    """Processing parameters for an ARD GRD crop.
+
+    Only orthorectification without RTC/filtering is currently supported
+    (`rtc` and `filtering` must be None).
+    """
+
     polarizations: list[Polarization]
     calibration: Optional[Calibration]
     orthorectify: Literal[True]
@@ -50,18 +58,25 @@ class Params:
 
 
 class InputProduct(abc.ABC):
+    """Base class for a way of referencing one input GRD product."""
+
     @abc.abstractmethod
-    def into_product_info(self) -> sentinel1.product.Sentinel1GRDProductInfo: ...
+    def into_product_info(self) -> sentinel1.product.Sentinel1GRDProductInfo:
+        """Resolve this reference into a `Sentinel1GRDProductInfo`."""
+        ...
 
 
 @dataclass(frozen=True)
 class CDSEInputProduct(InputProduct):
+    """References a GRD product to be fetched from CDSE by product id."""
+
     product_id: str
     cdse_backend: CDSESentinel1GRDCatalogBackend
     s3_session: Any
 
     @override
     def into_product_info(self) -> sentinel1.product.Sentinel1GRDProductInfo:
+        """Resolve `product_id` to a `CDSEUnzippedSafeSentinel1GRDProductInfo`."""
         return (
             sentinel1.product.CDSEUnzippedSafeSentinel1GRDProductInfo.from_product_id(
                 product_id=self.product_id,
@@ -117,7 +132,10 @@ DestinationGeometry = Union[
 
 @dataclass(frozen=True)
 class FilesystemResultDestination:
+    """Write each polarization's crop to a GeoTIFF file on disk."""
+
     paths: dict[Polarization, Path]
+    """Output file path for each requested polarization."""
 
 
 @dataclass
@@ -132,22 +150,27 @@ class MemoryResultDestination:
 
     @staticmethod
     def make_empty() -> MemoryResultDestination:
+        """Create an empty `MemoryResultDestination`, to be filled by `process`."""
         return MemoryResultDestination(arrays={}, _profile={})
 
     @property
     def crs(self) -> rasterio.CRS:
+        """CRS of the output crop."""
         return self._profile["crs"]
 
     @property
     def transform(self) -> rasterio.Affine:
+        """Affine transform of the output crop."""
         return self._profile["transform"]
 
     @property
     def nodata(self) -> float:
+        """No-data value of the output crop."""
         return self._profile["nodata"]
 
     @property
     def rasterio_profile(self) -> dict[str, Any]:
+        """Rasterio profile (driver, size, dtype, crs, transform, ...) of the output crop."""
         return self._profile
 
 
@@ -162,14 +185,17 @@ class LosAngles:
 
     @property
     def easting(self) -> float:
+        """East component of the (normalized) line-of-sight, in the local ENU frame."""
         return self.los[0]
 
     @property
     def northing(self) -> float:
+        """North component of the (normalized) line-of-sight, in the local ENU frame."""
         return self.los[1]
 
     @property
     def up(self) -> float:
+        """Up component of the (normalized) line-of-sight, in the local ENU frame."""
         return self.los[2]
 
     @property
@@ -194,6 +220,8 @@ class LosAngles:
 
 @dataclass(frozen=True)
 class CropMetadata:
+    """Metadata returned by `process` about the generated crop."""
+
     los_angles: LosAngles
     """
     Computed on the center of the crop
@@ -205,19 +233,27 @@ ResultDestination = Union[FilesystemResultDestination, MemoryResultDestination]
 
 @dataclass(frozen=True)
 class CropperInput:
+    """All inputs needed to generate one ARD GRD crop via `process`."""
+
     products: list[InputProduct]
     """GRD products from the same datatake"""
     destination_geometry: DestinationGeometry
+    """Target geometry (shape/transform/CRS, a bbox, or an image roi) of the crop."""
     params: Params
+    """Processing parameters (polarizations, calibration, ...)."""
     result_destination: ResultDestination
+    """Where the resulting rasters should be written."""
 
     dem_source: eos.dem.DEMSource
+    """Source used to fetch the DEM needed for orthorectification."""
     orbit_catalog_backend: orbit_catalog.Sentinel1OrbitCatalogBackend
+    """Backend used to fetch precise/restituted orbit state vectors."""
 
 
 def get_cdse_orbit_catalog_backend(
     username: str, password: str
 ) -> orbit_catalog.Sentinel1OrbitCatalogBackend:
+    """Build a CDSE-backed orbit catalog backend for the given credentials."""
     return orbit_catalog.CDSESentinel1OrbitCatalogBackend(username, password)
 
 
@@ -341,6 +377,30 @@ def _compute_los_angles(
 
 
 def process(input: CropperInput) -> CropMetadata:
+    """
+    Generate an Analysis-Ready-Data (ARD) crop of a Sentinel-1 IW GRD datatake.
+
+    Assembles the (possibly multiple) input GRD products of a single
+    datatake, calibrates and orthorectifies each requested polarization onto
+    the requested destination geometry, masks border noise, and writes the
+    result to `input.result_destination`.
+
+    Parameters
+    ----------
+    input : CropperInput
+        Input products, destination geometry, processing parameters, and
+        result destination.
+
+    Returns
+    -------
+    CropMetadata
+        Metadata about the crop (line-of-sight angles at the crop center).
+
+    Raises
+    ------
+    ProductsAreFromDifferentDatatakes
+        If `input.products` do not all belong to the same datatake.
+    """
     products = [p.into_product_info() for p in input.products]
     product_ids = [p.product_id for p in products]
 

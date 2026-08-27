@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+"""Fourier zoom (super-resolution) of a Sentinel-1 SLC mosaic crop."""
 
 import numpy as np
 
@@ -51,6 +52,13 @@ def clip_crop_roi_in_mosaic(mosaic_bsids, mosaic_write_rois, crop_roi):
 
 
 class MosaicZoomer(regist.SarResample):
+    """Zoom (Fourier-domain super-resolution) a crop of an SLC mosaic.
+
+    Handles a crop possibly spanning several bursts by deramping, zooming
+    and reramping each burst's contribution consistently, then stitching
+    them back together into a single zoomed array.
+    """
+
     def __init__(
         self,
         mosaic_bsids,

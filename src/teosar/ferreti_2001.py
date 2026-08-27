@@ -85,6 +85,12 @@ class Ferreti2001Result:
 def save_debug_image(
     path, PS_X_coordinates, PS_Y_coordinates, parent_shape, sparse_data, as_complex=True
 ):
+    """Scatter ``sparse_data`` (one value per PS) back onto a ``parent_shape`` raster and
+    write it to ``path`` as a GeoTIFF-less tiff (via :mod:`tifffile`).
+
+    If ``as_complex``, ``sparse_data`` is treated as a phase in radians and written as
+    ``exp(1j * phase)`` so that phase wrapping is visible when viewing the amplitude/angle.
+    """
     data_full = psutils.sparse_data_to_raster(
         sparse_data, PS_Y_coordinates, PS_X_coordinates, parent_shape
     )
@@ -111,6 +117,52 @@ def iterative_alternate_periodogram(
     ncpu=1,
     batch_size=128,
 ):
+    """Jointly estimate per-PS DEM error/velocity and per-date APS (system 13 of Ferretti 2001).
+
+    Alternates, for up to ``max_iterations``, between (1) fitting an affine APS plane
+    per date on the phase residual once the current DEM-error/velocity estimate is
+    removed, and (2) refining the DEM-error/velocity estimate on the phase residual
+    once the fitted APS is removed. Stops early once the estimate updates fall below
+    ``threshold_q``/``threshold_v``.
+
+    Parameters
+    ----------
+    PS_X_coordinates, PS_Y_coordinates : ndarray
+        Column/row coordinates of the PS candidates, in the parent raster.
+    Delta_phi_against_ref : ndarray
+        (t, h, w) unwrapped phase differences against the reference date, in radians.
+    bperp : ndarray
+        (t, h, w) normal baseline per date, in meters.
+    inc : ndarray
+        (h, w) incidence angle, in radians.
+    rng : ndarray
+        (w,) or (h, w) slant range, in meters.
+    years_since_ref : ndarray
+        (t,) number of years since the reference date, per date.
+    max_iterations : int
+        Maximum number of alternating estimation iterations.
+    threshold_q, threshold_v : float
+        Convergence thresholds on the DEM-error/velocity update, used to stop early.
+    wavelength : float
+        Radar wavelength, in meters.
+    debug_path : str, optional
+        If given, write per-iteration debug rasters (APS, phase residual components)
+        there.
+    use_tensorflow : bool
+        Use the TensorFlow-based periodogram search (:class:`PeriodogramTF`) instead
+        of the pure-numpy exhaustive/refinement search.
+    ncpu : int
+        Number of worker processes for the non-TensorFlow path.
+    batch_size : int
+        Batch size for the TensorFlow-based periodogram search.
+
+    Returns
+    -------
+    tuple
+        ``(q_estimation, v_estimation, APS_estimated, ak, p_dzeta, p_eta, residual)``:
+        the per-PS DEM error and velocity, the per-date estimated APS plane, its
+        constant/dzeta/eta coefficients, and the final wrapped phase residual.
+    """
     # Estimate LOS velocity, DEM errors and APSs on the sparse grid
     # Solving system 13 of Ferreti 2001
     # We start with errors = delta_phi, APS = 0, DEM errors = 0, velocity = 0
@@ -321,6 +373,40 @@ def velo_topo_periodogram(
     ncpu=1,
     batch_size=1024,
 ):
+    """Estimate, per PS, the DEM error and linear velocity that best explain ``phi_ps_mat``.
+
+    Performs a periodogram search over a (DEM error, velocity) grid, either using the
+    TensorFlow-based parallel search (``use_tensorflow=True``) or a pure-numpy
+    exhaustive-then-refined search per PS (optionally parallelized over ``ncpu``
+    processes).
+
+    Parameters
+    ----------
+    phi_ps_mat : ndarray
+        (num_dates, num_PS) phase to explain, in radians.
+    Cq : ndarray
+        (num_PS,) conversion factor from DEM error (m) to phase (rad) per unit baseline.
+    date_normal_baseline : ndarray
+        (num_dates, num_PS) normal baseline per date and PS, in meters.
+    Cv : float
+        Conversion factor from velocity (mm/year) to phase (rad).
+    years_since_ref : ndarray
+        (num_dates,) number of years since the reference date, per date.
+    weights_per_date : ndarray, optional
+        Per-date weights for the periodogram; defaults to uniform weights.
+    use_tensorflow : bool
+        Use the TensorFlow-based periodogram search instead of the numpy one.
+    ncpu : int
+        Number of worker processes for the non-TensorFlow path.
+    batch_size : int
+        Batch size for the TensorFlow-based periodogram search.
+
+    Returns
+    -------
+    tuple of ndarray
+        ``(q, v, gammas)``: the estimated DEM error (m), velocity (mm/year), and
+        temporal coherence, one value per PS.
+    """
     num_dates, num_PS = phi_ps_mat.shape
     v_test = periodogram.get_test_vals(300, 10)
     q_test = periodogram.get_test_vals(80, 10)
@@ -410,6 +496,16 @@ def velo_topo_periodogram(
 def process_ps(
     Cq_ps, date_normal_baseline_ps, q_test, lin_defo_model, phi_ps, weights_per_date
 ):
+    """Periodogram search for a single PS: find the (DEM error, velocity) pair that
+    best matches ``phi_ps``, combining ``lin_defo_model`` with a topographic model
+    built from ``Cq_ps``/``date_normal_baseline_ps``/``q_test``.
+
+    Returns
+    -------
+    tuple
+        ``(v, q, gamma_opt)``: estimated velocity, DEM error, and temporal coherence
+        at the optimum.
+    """
     topo_model = periodogram.LinearTermModel(Cq_ps, date_normal_baseline_ps, q_test)
     defo_topo_model = periodogram.CompoundModel([lin_defo_model, topo_model])
     defo_topo_grid = defo_topo_model.predict_grid()
@@ -428,6 +524,17 @@ def spatial_low_pass_interpolate_atmo(
     parent_shape,
     weights: Optional[NDArray] = None,
 ):
+    """Interpolate the sparse per-PS ``residual`` onto the full ``parent_shape`` grid.
+
+    Fits a smoothing bivariate spline (`scipy.interpolate.bisplrep`) through the
+    per-PS residual values at each date, optionally weighted (e.g. by PS temporal
+    coherence), then evaluates it on the regular pixel grid.
+
+    Returns
+    -------
+    list of ndarray
+        One (h, w) interpolated residual per date in ``residual``.
+    """
     h, w = parent_shape
     interpolated = []
     for res in residual:
@@ -440,6 +547,14 @@ def spatial_low_pass_interpolate_atmo(
 
 
 def get_atmo_full(interpolated, ak, pdzeta, peta, parent_shape):
+    """Reconstruct the full per-date APS by adding back the affine plane terms
+    (``ak``, ``pdzeta``, ``peta``) to the ``interpolated`` residual grids.
+
+    Returns
+    -------
+    ndarray
+        (t, h, w) full atmospheric phase screen per date.
+    """
     interpolated = np.array(interpolated)
     h, w = parent_shape
     xx, yy = np.meshgrid(np.arange(w), np.arange(h))
@@ -465,6 +580,36 @@ def final_periodogram(
     ncpu=1,
     batch_size=128,
 ):
+    """Run the DEM-error/velocity periodogram search over every pixel of the raster,
+    once the estimated ``atmos`` (per-date APS) has been removed.
+
+    This is the final, full-resolution step of the pipeline (step 4 in the module
+    docstring): unlike :func:`iterative_alternate_periodogram`, which only runs on the
+    sparse PS candidates, this runs :func:`velo_topo_periodogram` on every pixel.
+
+    Parameters
+    ----------
+    phi_ts_raster : ndarray
+        (t, h, w) unwrapped phase time series, in radians.
+    atmos : ndarray
+        (t, h, w) estimated atmospheric phase screen to remove, in radians.
+    years_since_ref : ndarray
+        (t,) number of years since the reference date, per date.
+    rng : ndarray
+        Slant range, broadcastable to (h, w), in meters.
+    inc : ndarray
+        (h, w) incidence angle, in radians.
+    bperp : ndarray
+        (t, h, w) normal baseline per date, in meters.
+    wavelength : float
+        Radar wavelength, in meters.
+
+    Returns
+    -------
+    tuple of ndarray
+        ``(q, v, gammas)``, each (h, w): DEM error (m), velocity (mm/year) and
+        temporal coherence per pixel.
+    """
     n, h, w = phi_ts_raster.shape
 
     phi_no_atmo = psutils.wrap(phi_ts_raster - atmos)
@@ -497,6 +642,11 @@ def final_periodogram(
 def get_phi_no_q_v_estimation(
     phi_ps_mat, Cq, date_normal_baseline, q, Cv, years_since_ref, v
 ):
+    """Subtract the DEM-error and linear-velocity phase contributions from ``phi_ps_mat``.
+
+    Returns the phase that should be explained by the atmosphere (APS) alone, given
+    the current DEM error ``q`` and velocity ``v`` estimates.
+    """
     phi_no_q_v_estimation = (
         phi_ps_mat
         - Cq[np.newaxis, :] * date_normal_baseline * q[np.newaxis, :]
@@ -524,6 +674,30 @@ def full_pipeline(
     ncpu=1,
     batch_size=128,
 ):
+    """Run :func:`run` and filter its result down to PS above ``second_gamma_threshold``.
+
+    Parameters
+    ----------
+    amps : ndarray
+        (t, h, w) SAR amplitude time series, used to select PS candidates by
+        dispersion of amplitude (see :func:`get_psc_coords`).
+    Delta_phi_against_ref, bperp, inc, rng, years_since_ref
+        See :func:`run`.
+    da_threshold : float
+        Amplitude-dispersion threshold used to select the initial PS candidates.
+    max_iterations, threshold_q, threshold_v, wavelength
+        See :func:`iterative_alternate_periodogram`.
+    first_gamma_threshold : float
+        Coherence threshold used while estimating the atmosphere (see :func:`get_atmos`).
+    second_gamma_threshold : float
+        Coherence threshold used to select the final set of PS returned here.
+
+    Returns
+    -------
+    tuple of ndarray
+        ``(q, v, gammas, col, row, residuals_in_mm, linear_deformation_in_mm)`` for
+        the PS whose final temporal coherence exceeds ``second_gamma_threshold``.
+    """
     result = run(
         amps,
         Delta_phi_against_ref,
@@ -560,6 +734,14 @@ def full_pipeline(
 
 
 def get_psc_coords(amps, da_threshold):
+    """Select PS candidates from ``amps`` by amplitude dispersion (test DA > ``da_threshold``).
+
+    Returns
+    -------
+    tuple of ndarray
+        ``(PS_X_coordinates, PS_Y_coordinates)``, the column/row coordinates of the
+        selected candidates.
+    """
     _, PS_candidates_basic, _ = psc.get_PS_candidates_DA(amps, da_threshold)
     PS_candidates_mask_sparse = psutils.dense_mask_to_sparse(PS_candidates_basic)
 
@@ -587,6 +769,28 @@ def get_atmos(
     ncpu=1,
     batch_size=128,
 ):
+    """Estimate the full-resolution atmospheric phase screen (APS) from PS candidates.
+
+    Runs :func:`iterative_alternate_periodogram` on the PS candidates, keeps the ones
+    whose residual coherence exceeds ``first_gamma_threshold``, spatially interpolates
+    their residual atmosphere with :func:`spatial_low_pass_interpolate_atmo`, and adds
+    back the fitted affine plane with :func:`get_atmo_full` to get a full-raster APS
+    (step 3 in the module docstring).
+
+    Parameters
+    ----------
+    PS_X_coordinates, PS_Y_coordinates, Delta_phi_against_ref, bperp, inc, rng,
+    years_since_ref, max_iterations, threshold_q, threshold_v, wavelength
+        See :func:`iterative_alternate_periodogram`.
+    first_gamma_threshold : float
+        Minimum residual coherence for a PS to contribute to the atmosphere
+        interpolation.
+
+    Returns
+    -------
+    ndarray
+        (t, h, w) estimated atmospheric phase screen per date, in radians.
+    """
     (
         q_estimation,
         v_estimation,
@@ -652,6 +856,38 @@ def run(
     ncpu=1,
     batch_size=128,
 ) -> Ferreti2001Result:
+    """Run the full Ferretti et al. (2001) PSI pipeline described in the module docstring.
+
+    Selects PS candidates by amplitude dispersion, estimates the atmosphere on them
+    (:func:`get_atmos`), then re-estimates DEM error/velocity/coherence over the full
+    raster once the atmosphere is removed (:func:`final_periodogram`).
+
+    Parameters
+    ----------
+    amps : ndarray
+        (t, h, w) SAR amplitude time series, used to select PS candidates.
+    Delta_phi_against_ref : ndarray
+        (t, h, w) unwrapped phase differences against the reference date, in radians.
+    bperp : ndarray
+        (t, h, w) normal baseline per date, in meters.
+    inc : ndarray
+        (h, w) incidence angle, in radians.
+    rng : ndarray
+        Slant range, broadcastable to (h, w), in meters.
+    years_since_ref : ndarray
+        (t,) number of years since the reference date, per date.
+    da_threshold : float
+        Amplitude-dispersion threshold used to select the initial PS candidates.
+    max_iterations, threshold_q, threshold_v, wavelength
+        See :func:`iterative_alternate_periodogram`.
+    first_gamma_threshold : float
+        Coherence threshold used while estimating the atmosphere; see :func:`get_atmos`.
+
+    Returns
+    -------
+    Ferreti2001Result
+        The fitted linear-deformation/topography/atmosphere model over the whole raster.
+    """
     print("ps candidates selection")
     # ps candidates
     PS_X_coordinates, PS_Y_coordinates = get_psc_coords(amps, da_threshold)
