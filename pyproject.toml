@@ -64,6 +64,15 @@ build-frontend = "build[uv]"
 test-command = "python -c \"import eos.sar.io; import eos.products.sentinel1.assembler\""
 
 [dependency-groups]
+docs = [
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.5.49",
+    "mkdocstrings[python]>=0.27.0",
+    "mkdocs-gen-files>=0.5.0",
+    "mkdocs-literate-nav>=0.6.1",
+    "mkdocs-section-index>=0.3.9",
+    "ruff>=0.8.5",  # used by mkdocstrings to format signatures
+]
 dev = [
     # linting
     "ruff>=0.8.5",
