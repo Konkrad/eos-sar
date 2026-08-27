@@ -1,3 +1,5 @@
+"""Place Sentinel-1 TOPS bursts within the merged (debursted) acquisition mosaic."""
+
 import datetime
 from typing import Sequence
 
@@ -139,6 +141,15 @@ class _Sentinel1AcquisitionCutter:
 
 
 class PrimarySentinel1AcquisitionCutter(_Sentinel1AcquisitionCutter):
+    """Compute the burst-to-mosaic layout, with overlap cuts, for a primary acquisition.
+
+    In addition to placing each burst within the merged (debursted) mosaic
+    like the base class, this cutter computes, for each burst, an "inner"
+    region of interest that removes the overlap with neighboring bursts (in
+    azimuth) and neighboring subswaths (in range), so that bursts can be
+    stitched into the mosaic without duplicated coverage.
+    """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._compute_cuts()
@@ -237,6 +248,33 @@ class PrimarySentinel1AcquisitionCutter(_Sentinel1AcquisitionCutter):
     def get_debursting_rois(
         self, roi: Roi
     ) -> tuple[set[str], dict[str, Roi], dict[str, Roi]]:
+        """
+        Get, for a target roi in mosaic coordinates, the bursts that
+        contribute to it and their corresponding sub-rois.
+
+        For each burst whose non-overlapping ("inner") region intersects
+        `roi`, this computes the piece of that intersection expressed in
+        burst-local coordinates (to know what to read/resample from the
+        burst) and expressed relative to `roi`'s origin (to know where to
+        write it in the output crop).
+
+        Parameters
+        ----------
+        roi : eos.sar.roi.Roi
+            Target region of interest, in mosaic (debursted) coordinates.
+
+        Returns
+        -------
+        bsids : set of str
+            BSIDs of the bursts contributing to `roi`.
+        within_burst_rois : dict bsid -> eos.sar.roi.Roi
+            For each contributing burst, the relevant sub-roi expressed in
+            that burst's local coordinates.
+        write_rois : dict bsid -> eos.sar.roi.Roi
+            For each contributing burst, the sub-roi expressed relative to
+            the origin of `roi`, i.e. where to write the burst's
+            contribution in the output crop.
+        """
         bsids = set()
         within_burst_rois = {}
         write_rois = {}
@@ -268,11 +306,30 @@ class PrimarySentinel1AcquisitionCutter(_Sentinel1AcquisitionCutter):
         return bsids, within_burst_rois, write_rois
 
     def mask_pts_in_burst(self, bsid, azt, rng):
+        """
+        Compute a mask of points falling within a burst's non-overlapping region.
+
+        Parameters
+        ----------
+        bsid : str
+            BSID of the burst to test against.
+        azt : ndarray
+            Azimuth time(s) of the points.
+        rng : ndarray
+            Slant range(s) of the points.
+
+        Returns
+        -------
+        ndarray of bool
+            Mask, True for points that fall within the burst's inner
+            (non-overlapping) region of interest.
+        """
         row, col = self.to_row_col_in_burst(azt, rng, bsid)
         burst_mask = self._inner_burst_roi[bsid].contains(col, row)
         return burst_mask
 
     def visualize_burst_rois_in_mosaic(self):
+        """Plot, for debugging, each burst's outer and inner rois in the mosaic frame."""
         import matplotlib.pyplot as plt
         import numpy as np
 
@@ -309,7 +366,13 @@ class PrimarySentinel1AcquisitionCutter(_Sentinel1AcquisitionCutter):
 
 
 class SecondarySentinel1AcquisitionCutter(_Sentinel1AcquisitionCutter):
-    pass
+    """Place bursts of a secondary acquisition within the mosaic frame.
+
+    Unlike `PrimarySentinel1AcquisitionCutter`, this does not compute
+    overlap cuts: it is used to locate bursts of a secondary acquisition
+    (e.g. for coregistration/reading) in the mosaic frame defined by a
+    primary acquisition, without needing to remove overlaps itself.
+    """
 
 
 def _make_cutter(bursts_metadata: Sequence[Sentinel1BurstMetadata], cls):
@@ -354,8 +417,32 @@ def _make_cutter(bursts_metadata: Sequence[Sentinel1BurstMetadata], cls):
 
 
 def make_primary_cutter_from_bursts_meta(bursts_metadata):
+    """Build a `PrimarySentinel1AcquisitionCutter` from a list of burst metadata.
+
+    Parameters
+    ----------
+    bursts_metadata : Sequence[Sentinel1BurstMetadata]
+        Metadata of the bursts of the primary acquisition.
+
+    Returns
+    -------
+    PrimarySentinel1AcquisitionCutter
+        Cutter placing the bursts in the merged mosaic frame with overlap cuts.
+    """
     return _make_cutter(bursts_metadata, PrimarySentinel1AcquisitionCutter)
 
 
 def make_secondary_cutter_from_bursts_meta(bursts_metadata):
+    """Build a `SecondarySentinel1AcquisitionCutter` from a list of burst metadata.
+
+    Parameters
+    ----------
+    bursts_metadata : Sequence[Sentinel1BurstMetadata]
+        Metadata of the bursts of the secondary acquisition.
+
+    Returns
+    -------
+    SecondarySentinel1AcquisitionCutter
+        Cutter placing the bursts in the mosaic frame.
+    """
     return _make_cutter(bursts_metadata, SecondarySentinel1AcquisitionCutter)

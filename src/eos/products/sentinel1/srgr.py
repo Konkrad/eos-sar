@@ -1,3 +1,5 @@
+"""Slant-range/ground-range (SRGR) conversion for Sentinel-1 GRD products."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,6 +15,14 @@ from eos.sar.srgr import Arrayf64
 
 @dataclass(frozen=True)
 class Sentinel1GRDSRGRMetadata:
+    """Slant-range/ground-range conversion coefficients of a GRD product.
+
+    Holds, for each azimuth time in `times`, the polynomial coefficients
+    (`srgr_coeffs`, `grsr_coeffs`) and range origins (`sr0`, `gr0`) needed to
+    convert between slant range and ground range, as extracted from the
+    product's `coordinateConversion` annotation.
+    """
+
     times: list[float]
     srgr_coeffs: list[list[float]]
     grsr_coeffs: list[list[float]]
@@ -29,11 +39,13 @@ class Sentinel1GRDSRGRMetadata:
         return self.__dict__[name]
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the metadata as a plain dict of its fields."""
         d = self.__dict__.copy()
         return d
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> Sentinel1GRDSRGRMetadata:
+        """Build a `Sentinel1GRDSRGRMetadata` from a dict of its fields."""
         return Sentinel1GRDSRGRMetadata(**d)
 
 
@@ -92,7 +104,15 @@ def _evaluate(azt, x, times, coeffs, origins):
 
 
 class Sentinel1SRGRConverter(eos.sar.srgr.SRGRConverter):
+    """SRGR converter backed by a Sentinel-1 GRD product's SRGR metadata."""
+
     def __init__(self, srgr_meta: Sentinel1GRDSRGRMetadata):
+        """
+        Parameters
+        ----------
+        srgr_meta : Sentinel1GRDSRGRMetadata
+            SRGR conversion coefficients extracted from the product metadata.
+        """
         super().__init__()
         self.times = np.asarray(srgr_meta.times)
         self.srgr_coeffs = np.asarray(srgr_meta.srgr_coeffs)
@@ -102,6 +122,20 @@ class Sentinel1SRGRConverter(eos.sar.srgr.SRGRConverter):
 
     @override
     def gr_to_rng(self, gr: ArrayLike, azt: ArrayLike) -> Arrayf64:
+        """Convert ground range to slant range.
+
+        Parameters
+        ----------
+        gr : ndarray or scalar
+            Ground range value(s), in meters.
+        azt : ndarray or scalar
+            Azimuth time(s) (POSIX timestamp) at which to perform the conversion.
+
+        Returns
+        -------
+        ndarray or scalar
+            Slant range value(s), in meters.
+        """
         gr = np.atleast_1d(gr)
         azt = np.atleast_1d(azt)
 
@@ -114,6 +148,20 @@ class Sentinel1SRGRConverter(eos.sar.srgr.SRGRConverter):
 
     @override
     def rng_to_gr(self, rng: ArrayLike, azt: ArrayLike) -> Arrayf64:
+        """Convert slant range to ground range.
+
+        Parameters
+        ----------
+        rng : ndarray or scalar
+            Slant range value(s), in meters.
+        azt : ndarray or scalar
+            Azimuth time(s) (POSIX timestamp) at which to perform the conversion.
+
+        Returns
+        -------
+        ndarray or scalar
+            Ground range value(s), in meters.
+        """
         rng = np.atleast_1d(rng)
         azt = np.atleast_1d(azt)
 

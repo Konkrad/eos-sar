@@ -38,6 +38,19 @@ logger = logging.getLogger(__name__)
 
 
 def meta_from_slc_tif(slc_tif_path: str) -> CapellaSLCMetadata:
+    """Parse the Capella SLC metadata embedded in a GeoTIFF's `TIFFTAG_IMAGEDESCRIPTION` tag.
+
+    Parameters
+    ----------
+    slc_tif_path : str
+        Path to the Capella SLC GeoTIFF product.
+
+    Returns
+    -------
+    CapellaSLCMetadata
+        Parsed metadata. Raises an `AssertionError` if the embedded metadata
+        is not for an SLC product.
+    """
     with rasterio.open(slc_tif_path, "r") as db:
         meta = parse_metadata(db.get_tag_item("TIFFTAG_IMAGEDESCRIPTION"))
     assert isinstance(meta, CapellaSLCMetadata)
@@ -47,6 +60,21 @@ def meta_from_slc_tif(slc_tif_path: str) -> CapellaSLCMetadata:
 def proj_model_from_meta(
     metadata: CapellaSLCMetadata, use_apd: bool = True
 ) -> CapellaSLCModel:
+    """Build a `CapellaSLCModel` from metadata, with default orbit degree/tolerances.
+
+    Parameters
+    ----------
+    metadata : CapellaSLCMetadata
+        Parsed Capella SLC metadata.
+    use_apd : bool, optional
+        If True (default), apply an atmospheric path delay correction
+        (`ApdCorrection`) to the sensor model.
+
+    Returns
+    -------
+    CapellaSLCModel
+        Sensor model built with a degree-11 orbit and a 0.0001 tolerance.
+    """
     orbit = Orbit(sv=metadata.state_vectors, degree=11)
 
     corrections = [ApdCorrection(orbit)] if use_apd else []
@@ -62,6 +90,7 @@ def proj_model_from_meta(
 
 
 def pid_from_tif_path(path: str) -> str:
+    """Extract the Capella product id (first 51 characters of the basename) from a file path."""
     # take only basename
     basename = os.path.basename(path)
     # Capella product id should be 51 characters long
@@ -71,6 +100,8 @@ def pid_from_tif_path(path: str) -> str:
 
 @dataclass(frozen=True)
 class CapellaCrop:
+    """A cropped (and, for secondary images, resampled/coregistered) Capella SLC image."""
+
     product_id: str
     model: CapellaSLCModel
     meta: CapellaSLCMetadata
@@ -95,6 +126,31 @@ def get_primary_crop(
     use_apd: bool = True,
     calibrate: bool = True,
 ) -> CapellaCrop:
+    """Read and crop the primary (reference) Capella SLC image.
+
+    Parameters
+    ----------
+    primary_raster_path : str
+        Path to the primary Capella SLC GeoTIFF.
+    roi_provider : RoiProvider
+        Provider used to determine the region of interest to crop, in the
+        primary image's frame.
+    dem_source : DEMSource
+        DEM source passed to `roi_provider`.
+    get_complex : bool, optional
+        Whether to read the raster as complex data. Defaults to True.
+    use_apd : bool, optional
+        If True (default), apply an atmospheric path delay correction to
+        the sensor model.
+    calibrate : bool, optional
+        If True (default), multiply the read array by the metadata's
+        `scale_factor` to obtain calibrated values.
+
+    Returns
+    -------
+    CapellaCrop
+        Crop of the primary image, with an identity `resampling_matrix`.
+    """
     primary_metadata = meta_from_slc_tif(primary_raster_path)
     primary_model = proj_model_from_meta(primary_metadata, use_apd=use_apd)
 
@@ -159,6 +215,26 @@ def get_primary_registLUT(
     dem: DEM,
     dem_sampling_ratio: float = 0.3,
 ) -> RegistrationLUT:
+    """Sample DEM points over `primary_roi` and their row/col projection in the primary image.
+
+    Parameters
+    ----------
+    primary_model : CapellaSLCModel
+        Sensor model of the primary image.
+    primary_roi : Roi
+        Region of interest of the primary image.
+    dem : DEM
+        DEM covering `primary_roi`.
+    dem_sampling_ratio : float, optional
+        Fraction of DEM points to sample, passed to
+        `get_registration_dem_pts`. Defaults to 0.3.
+
+    Returns
+    -------
+    RegistrationLUT
+        Sampled DEM points with their row/col projection in the primary
+        image, to be used for registering secondary images.
+    """
     x_sampled, y_sampled, raster_sampled, crs = get_registration_dem_pts(
         primary_model, primary_roi, sampling_ratio=dem_sampling_ratio, dem=dem
     )
@@ -180,6 +256,40 @@ def get_primary_crop_dem_registLUT(
     use_apd: bool = True,
     calibrate: bool = True,
 ) -> tuple[CapellaCrop, DEM, RegistrationLUT]:
+    """Crop the primary image, fetch its DEM, and build its registration LUT.
+
+    Combines `get_primary_crop`, `CapellaSLCModel.fetch_dem`, and
+    `get_primary_registLUT`.
+
+    Parameters
+    ----------
+    primary_raster_path : str
+        Path to the primary Capella SLC GeoTIFF.
+    roi_provider : RoiProvider
+        Provider used to determine the region of interest to crop.
+    dem_source : DEMSource
+        DEM source used both by `roi_provider` and to fetch the DEM
+        covering the cropped region.
+    dem_sampling_ratio : float, optional
+        Fraction of DEM points to sample for registration. Defaults to 0.3.
+    get_complex : bool, optional
+        Whether to read the raster as complex data. Defaults to True.
+    use_apd : bool, optional
+        If True (default), apply an atmospheric path delay correction to
+        the sensor model.
+    calibrate : bool, optional
+        If True (default), multiply the read array by the metadata's
+        `scale_factor`.
+
+    Returns
+    -------
+    primary_crop : CapellaCrop
+        Crop of the primary image.
+    dem : DEM
+        DEM covering the primary crop.
+    primary_registration_LUT : RegistrationLUT
+        Registration lookup table for aligning secondary images.
+    """
     primary_crop = get_primary_crop(
         primary_raster_path,
         roi_provider,
@@ -209,9 +319,46 @@ def get_secondary_crop(
     calibrate: bool = True,
 ) -> CapellaCrop:
     """
-    Important ! registration refinement !
+    Read, register, and resample a secondary Capella SLC image onto the primary's ROI.
+
+    Registration is first estimated orbitally (from the DEM points/rows/cols
+    in `primary_registration_LUT`), then the secondary image is deramped,
+    warped, and reramped onto the primary's grid.
+
+    Important! registration refinement!
         if primary_array is provided (not None):
-        -> the registration will be refined with image based alignement.
+        -> the registration will be refined with image based alignement
+        (phase correlation on amplitude between the primary and the
+        orbitally-resampled secondary).
+
+    Parameters
+    ----------
+    secondary_raster_path : str
+        Path to the secondary Capella SLC GeoTIFF.
+    primary_roi : Roi
+        Region of interest of the primary image, i.e. the target grid onto
+        which the secondary is resampled.
+    primary_registration_LUT : RegistrationLUT
+        DEM points and their row/col projection in the primary image, from
+        `get_primary_registLUT`.
+    primary_array : NDArray, optional
+        Primary image array, used to refine the registration with
+        phase correlation. If None (default), only the orbital registration
+        is used.
+    get_complex : bool, optional
+        Whether to read the raster as complex data. Defaults to True.
+    use_apd : bool, optional
+        If True (default), apply an atmospheric path delay correction to
+        the secondary sensor model.
+    calibrate : bool, optional
+        If True (default), multiply the read array by the metadata's
+        `scale_factor`.
+
+    Returns
+    -------
+    CapellaCrop
+        Secondary image resampled onto `primary_roi`, with its
+        `resampling_matrix` and estimated `translation`.
     """
 
     secondary_product_id = pid_from_tif_path(secondary_raster_path)

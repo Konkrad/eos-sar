@@ -27,7 +27,7 @@ class TopoCorrection:
         ----------
         primary_model : eos.sar.model.SensorModel
             primary model relative to which the corrections are computed.
-        secModelList : List of eos.sar.model.SensorModel
+        secondary_models : List of eos.sar.model.SensorModel
             secondary models list.
         grid_size : int, optional
             Geometric quantities (Baseline, incidence) are computed on a meshgrid

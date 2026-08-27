@@ -418,7 +418,7 @@ class MCFSolver(Enum):
 
 
 class UnrecognizedSolver(Exception):
-    pass
+    """Raised when an `MCFSolver` value passed to a solving function is not recognized."""
 
 
 def mcf_estim_unwrapped_gradients(wrapped_phase: RealArray, mcf_solver: MCFSolver):

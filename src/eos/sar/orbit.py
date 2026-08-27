@@ -14,11 +14,14 @@ from eos.sar import cheb
 
 @dataclass(frozen=True)
 class StateVector:
+    """A single orbital state vector: satellite position and velocity at a given time."""
+
     time: float
     position: tuple[float, float, float]
     velocity: tuple[float, float, float]
 
     def __getitem__(self, name: str) -> Any:
+        """Return the field named `name` (deprecated: kept for backward compatibility with the former dict-based interface)."""
         warnings.warn(
             "Indexing a StateVector is deprecated (they no longer are dict).",
             DeprecationWarning,
@@ -26,6 +29,7 @@ class StateVector:
         return self.__dict__[name]
 
     def to_dict(self) -> dict[str, Any]:
+        """Return this state vector as a dict with keys 'time', 'position', 'velocity'."""
         return dict(
             time=self.time,
             position=self.position,
@@ -34,6 +38,7 @@ class StateVector:
 
     @staticmethod
     def from_dict(dict: dict[str, Any]) -> StateVector:
+        """Build a StateVector from a dict with keys 'time', 'position', 'velocity'."""
         return StateVector(
             time=dict["time"],
             position=tuple(dict["position"]),
@@ -84,11 +89,12 @@ class Orbit:
         Parameters
         ----------
         azt: 1darray (n, )
-           Azimuth time on which to evaluate
+            Azimuth time on which to evaluate
         order: int
             Order of the derivative, default is 0
             for order = 0, the position of the satellite is returned
-        Returns:
+
+        Returns
         -------
         (n, 3) numpy.ndarray
             Position of satellite for each azimuth time provided
@@ -101,6 +107,7 @@ class Orbit:
         return cheb.evaluate_cheb_interp(azt, coeff, self.cheb_domain)
 
     def to_dict(self) -> dict[str, Any]:
+        """Return this orbit as a dict with keys 'state_vectors' and 'degree'."""
         metadata = dict(
             state_vectors=[s.to_dict() for s in self.sv],
             degree=self.degree,
@@ -109,6 +116,7 @@ class Orbit:
 
     @staticmethod
     def from_dict(dict: dict[str, Any]) -> Orbit:
+        """Build an Orbit from a dict with keys 'state_vectors' (list of StateVector dicts) and optionally 'degree'."""
         sv = [StateVector.from_dict(s) for s in dict["state_vectors"]]
         degree = dict.get("degree", 11)
         return Orbit(sv=sv, degree=degree)

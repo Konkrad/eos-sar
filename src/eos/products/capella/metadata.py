@@ -160,15 +160,19 @@ class CapellaMetadata:
 
     @property
     def wavelength(self) -> float:
+        """Radar wavelength in meters, derived from `center_frequency`."""
         return C / self.center_frequency
 
     @property
     def shape(self) -> tuple[int, int]:
+        """Image shape as `(height, width)`."""
         return (self.height, self.width)
 
 
 @dataclass(frozen=True)
 class CapellaPolynomialMeta:
+    """Metadata describing a 1D or 2D polynomial as stored in Capella product JSON."""
+
     poly_type: Literal["standard", "chebyshev", "legendre"]
     dimension: Literal[1, 2]
     """
@@ -192,6 +196,13 @@ class CapellaPolynomialMeta:
 
 @dataclass(frozen=True)
 class CapellaSLCMetadata(CapellaMetadata):
+    """Metadata for a Capella SLC (slant plane, zero-Doppler) product.
+
+    Extends :class:`CapellaMetadata` with the slant range/azimuth timing and
+    Doppler centroid polynomial needed to build a sensor model. Instances are
+    produced by :func:`parse_metadata`.
+    """
+
     starting_range: float
     """
     *collect/image/image_geometry/range_to_first_sample*: The slant range distance to the first sample in meters
@@ -235,6 +246,13 @@ meters
 
 @dataclass(frozen=True)
 class CapellaGECMetadata(CapellaMetadata):
+    """Metadata for a Capella GEC (geocoded, ground-projected) product.
+
+    Extends :class:`CapellaMetadata` with the inflated WGS84 altitude used
+    for the terrain model reprojection. Instances are produced by
+    :func:`parse_metadata`.
+    """
+
     alt_inflated_wgs84: float
     """
     Deduced from collect/image/terrain_models/reprojection/name, for ex. ExplicitInflatedWGS84[243.3561248779297] would give alt_inflated_wgs84=243.3561248779297
@@ -242,6 +260,28 @@ class CapellaGECMetadata(CapellaMetadata):
 
 
 def parse_metadata(json_content: str) -> Union[CapellaSLCMetadata, CapellaGECMetadata]:
+    """
+    Parse a Capella product JSON metadata file into a typed metadata object.
+
+    Parameters
+    ----------
+    json_content : str
+        Content of the Capella ``extended.json`` metadata file.
+
+    Returns
+    -------
+    CapellaSLCMetadata or CapellaGECMetadata
+        Parsed metadata, typed according to the product's ``product_type``
+        ("SLC" or "GEC").
+
+    Raises
+    ------
+    AssertionError
+        If the product type is not "SLC"/"GEC", or if the metadata contains
+        values this parser does not support (e.g. a non-slant-plane SLC
+        image geometry, a non-zero Doppler centroid polynomial for SLC, or a
+        non-ECEF state coordinate system).
+    """
     data = json.loads(json_content)
 
     product_type = data["product_type"]

@@ -70,9 +70,11 @@ class GenericSensorModelHelper:
     """
 
     def to_azt_rng(self, row: ArrayLike, col: ArrayLike) -> tuple[Arrayf64, Arrayf64]:
+        """Convert (row, col) image coordinates to (azimuth time, range) via `self.coordinate`."""
         return self.coordinate.to_azt_rng(row, col)
 
     def to_row_col(self, azt: ArrayLike, rng: ArrayLike) -> tuple[Arrayf64, Arrayf64]:
+        """Convert (azimuth time, range) to (row, col) image coordinates via `self.coordinate`."""
         return self.coordinate.to_row_col(azt, rng)
 
     def projection(

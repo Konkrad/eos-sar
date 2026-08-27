@@ -15,10 +15,31 @@ Arrayf64 = NDArray[np.float64]
 
 
 class RoiProvider(abc.ABC):
+    """Abstract base class for strategies that determine a region of interest (Roi) in a sensor model's image."""
+
     @abc.abstractmethod
     def get_roi(
         self, proj_model: SensorModel, dem_source: DEMSource
-    ) -> tuple[Roi, Arrayf64, Arrayf64]: ...
+    ) -> tuple[Roi, Arrayf64, Arrayf64]:
+        """
+        Determine the region of interest in the image of `proj_model`.
+
+        Parameters
+        ----------
+        proj_model : eos.sar.model.SensorModel
+            Sensor model used to project/localize points to determine the roi.
+        dem_source : eos.dem.DEMSource
+            Source used to fetch a DEM as needed to project points.
+
+        Returns
+        -------
+        roi : eos.sar.roi.Roi
+            The determined region of interest.
+        rows : ndarray
+            Row coordinates of the points (e.g. corners) used to derive the roi.
+        cols : ndarray
+            Column coordinates of the points (e.g. corners) used to derive the roi.
+        """
 
 
 def _geometry_to_geocoords(geometry: shapely.Geometry) -> list[tuple[float, float]]:
@@ -52,6 +73,21 @@ def _geometry_to_roi(
 
 @dataclass(frozen=True)
 class GeometryRoiProvider(RoiProvider):
+    """Determine the roi covering a given geometry, padded to a minimum width/height.
+
+    Parameters
+    ----------
+    geometry : shapely.Geometry
+        Geometry (in epsg:4326) whose projected extent defines the roi.
+    dem_fetch_buffer : float, optional
+        Buffer (in degrees) applied to `geometry`'s bounds when fetching the
+        DEM used for the projection. The default is 0.1.
+    min_width : int, optional
+        Minimum width in pixels of the resulting roi. The default is 1024.
+    min_height : int, optional
+        Minimum height in pixels of the resulting roi. The default is 512.
+    """
+
     geometry: shapely.Geometry
     dem_fetch_buffer: float = 0.1
     min_width: int = 1024
@@ -61,6 +97,7 @@ class GeometryRoiProvider(RoiProvider):
     def get_roi(
         self, proj_model: SensorModel, dem_source: DEMSource
     ) -> tuple[Roi, Arrayf64, Arrayf64]:
+        """See RoiProvider.get_roi."""
         dem_bounds = self.geometry.buffer(self.dem_fetch_buffer).bounds
         dem = dem_source.fetch_dem(dem_bounds)
 
@@ -80,6 +117,21 @@ class GeometryRoiProvider(RoiProvider):
 
 @dataclass(frozen=True)
 class CentroidRoiProvider(RoiProvider):
+    """Determine a fixed-size roi centered on the projection of a given (lon, lat) point.
+
+    Parameters
+    ----------
+    point : tuple of float
+        (lon, lat) point, in epsg:4326, on which the roi is centered.
+    w : int
+        Width in pixels of the roi.
+    h : int
+        Height in pixels of the roi.
+    dem_fetch_buffer_round_point : float, optional
+        Buffer (in degrees) applied around `point` when fetching the DEM
+        used for the projection. The default is 0.1.
+    """
+
     point: tuple[float, float]
     w: int
     h: int
@@ -89,6 +141,7 @@ class CentroidRoiProvider(RoiProvider):
     def get_roi(
         self, proj_model: SensorModel, dem_source: DEMSource
     ) -> tuple[Roi, Arrayf64, Arrayf64]:
+        """See RoiProvider.get_roi."""
         dem_bounds = (
             shapely.Point(*self.point).buffer(self.dem_fetch_buffer_round_point).bounds
         )
@@ -106,6 +159,18 @@ class CentroidRoiProvider(RoiProvider):
 
 @dataclass(frozen=True)
 class PrescribedRoiProvider(RoiProvider):
+    """Return a roi given directly by the caller (or the whole image if none is given).
+
+    Parameters
+    ----------
+    roi : eos.sar.roi.Roi, optional
+        The roi to return. If None, the whole extent of the sensor model's
+        image is used. The default is None.
+    make_valid : bool, optional
+        If True, `roi` is clipped to the bounds of the sensor model's image.
+        The default is False.
+    """
+
     roi: Optional[Roi] = None
     make_valid: bool = False
 
@@ -113,6 +178,7 @@ class PrescribedRoiProvider(RoiProvider):
     def get_roi(
         self, proj_model: SensorModel, dem_source: DEMSource
     ) -> tuple[Roi, Arrayf64, Arrayf64]:
+        """See RoiProvider.get_roi. `dem_source` is unused."""
         parent_shape = proj_model.h, proj_model.w
         if self.roi is None:
             roi = Roi(0, 0, parent_shape[1], parent_shape[0])

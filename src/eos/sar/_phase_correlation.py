@@ -110,4 +110,16 @@ def registering_shift_from_phase_correlation(
 
 
 def compute_fft(b):
+    """Compute the 2D FFT of an image, replacing NaNs with zero beforehand.
+
+    Parameters
+    ----------
+    b : ndarray
+        2D input array, possibly containing NaNs.
+
+    Returns
+    -------
+    ndarray of complex64
+        2D Fourier transform of the (NaN-replaced) input.
+    """
     return np.fft.fft2(np.nan_to_num(b)).astype(np.complex64)

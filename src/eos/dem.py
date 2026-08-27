@@ -65,6 +65,16 @@ def write_crop_to_file(array, transform, crs, path):
 
 
 def lonlat_list_to_bounds(lons: ArrayLike, lats: ArrayLike) -> Bounds:
+    """
+    Compute the bounding box enclosing a set of longitude/latitude points.
+
+    Args:
+        lons: longitude or array-like of longitudes
+        lats: latitude or array-like of latitudes
+
+    Returns:
+        Bounds: (lon_min, lat_min, lon_max, lat_max)
+    """
     lon_min = np.min(lons)
     lat_min = np.min(lats)
     lon_max = np.max(lons)
@@ -112,7 +122,7 @@ def _bilinear_interp(
 
 
 class OutOfBoundsException(IndexError):
-    pass
+    """Raised when a queried location falls outside the extent of a DEM."""
 
 
 def get_2x2_crops(
@@ -149,6 +159,13 @@ def get_2x2_crops(
 
 @dataclass(frozen=True)
 class DEM:
+    """A Digital Elevation Model raster, referenced to the WGS84 ellipsoid.
+
+    Wraps a height array together with the affine transform mapping pixel
+    coordinates to lon/lat (EPSG:4326). Instances are typically produced by
+    a :class:`DEMSource`.
+    """
+
     array: NDArray[np.float32]
     """ raster containing heights in meters relative to the ellipsoid """
     transform: affine.Affine
@@ -185,6 +202,28 @@ class DEM:
         interpolation: str = "bilinear",
         raise_error: bool = True,
     ) -> NDArray[np.float32]:
+        """
+        Interpolate the DEM array at fractional pixel (column, row) coordinates.
+
+        Args:
+            x_coords (NDArray[np.floating]): 1D array of fractional column coordinates.
+            y_coords (NDArray[np.floating]): 1D array of fractional row coordinates,
+                same shape as `x_coords`.
+            interpolation (str): if 'bilinear' (default) returns the height
+                bilinearly interpolated, else if 'nearest' returns the nearest
+                neighbor value.
+            raise_error (bool): whether it should raise an error when a point is
+                outside the array bounds; otherwise out-of-bounds points are
+                returned as nan.
+
+        Returns:
+            NDArray[np.float32]: 1D array of interpolated altitudes, same length
+            as `x_coords`/`y_coords`.
+
+        Raises:
+            OutOfBoundsException: if `raise_error` is True and a point is
+                outside the array bounds.
+        """
         assert len(x_coords.shape) == 1 and x_coords.shape == y_coords.shape, (
             f"should have 1d arrays of same length as input, got x_coords.shape={x_coords.shape} and y_coords.shape={y_coords.shape}"
         )
@@ -335,12 +374,31 @@ class DEM:
         return DEM(array=array, transform=transform)
 
     def fill_nan(self, value: float = 0.0):
+        """
+        Return a copy of the DEM with nan values replaced by `value`.
+
+        Args:
+            value (float): value used to replace nans. The default is 0.0.
+
+        Returns:
+            DEM: new DEM instance with nans filled.
+        """
         new_array = self.array.copy()
         new_array[np.isnan(new_array)] = value
         return DEM(array=new_array, transform=self.transform, crs=self.crs)
 
     @staticmethod
     def from_rasterio_dataset(dataset: rasterio.DatasetReader):
+        """
+        Build a DEM from an opened rasterio dataset.
+
+        Args:
+            dataset (rasterio.DatasetReader): opened dataset, must be in
+                "EPSG:4326".
+
+        Returns:
+            DEM: DEM built from the dataset's first band, transform, and crs.
+        """
         array = dataset.read(1)
         profile: dict[str, Any] = dataset.profile
         transform = profile["transform"]
@@ -348,6 +406,13 @@ class DEM:
         return DEM(array=array, transform=transform)
 
     def get_extent(self):
+        """
+        Return the (lon_min, lat_min, lon_max, lat_max) extent of the DEM.
+
+        Returns:
+            tuple: bounds of the DEM raster, as returned by
+            `rasterio.transform.array_bounds`.
+        """
         return rasterio.transform.array_bounds(
             self.array.shape[0], self.array.shape[1], self.transform
         )
@@ -377,9 +442,21 @@ class DEMSource(abc.ABC):
 
 @dataclass(frozen=True)
 class SRTM4Source(DEMSource):
+    """A `DEMSource` backed by the `srtm4` package (SRTM, ellipsoidal datum)."""
+
     nan_value: Optional[float] = None
+    """ if not None, fill nan values of fetched DEMs with this value """
 
     def fetch_dem(self, bounds: Bounds) -> DEM:
+        """
+        Return a DEM covering `bounds`, fetched from SRTM via `srtm4.crop`.
+
+        Args:
+            bounds (4-tuple): tuple of floats lon_min, lat_min, lon_max, lat_max
+
+        Returns:
+            DEM: eos.dem.DEM instance.
+        """
         array, transform, crs = srtm4.crop(bounds, datum="ellipsoidal")
         assert isinstance(array, np.ndarray)
         assert array.dtype == np.float32
@@ -391,6 +468,7 @@ class SRTM4Source(DEMSource):
         return dem
 
     def elevation(self, lons, lats, interpolation="bilinear"):
+        """Deprecated. Use `DEMSource.fetch_dem(bounds).elevation(lons, lats)`."""
         warnings.warn(
             "DEMSource.elevation is deprecated. Use DEMSource.fetch_dem(bounds).elevation(lons, lats).",
             DeprecationWarning,
@@ -399,6 +477,7 @@ class SRTM4Source(DEMSource):
         return srtm4.srtm4(lons, lats)
 
     def crop(self, bounds):
+        """Deprecated. Use `DEMSource.fetch_dem(bounds).crop(bounds)`."""
         warnings.warn(
             "DEMSource.crop is deprecated. Use DEMSource.fetch_dem(bounds).crop(bounds).",
             DeprecationWarning,
@@ -408,8 +487,16 @@ class SRTM4Source(DEMSource):
 
 @dataclass(frozen=True)
 class DEMStitcherSource(DEMSource):
+    """A `DEMSource` backed by the `dem-stitcher` package.
+
+    Fetches and merges DEM tiles (default GLO-30) and removes the geoid to
+    return ellipsoidal heights.
+    """
+
     dem_name: str = "glo_30"
+    """ DEM to use, see https://github.com/ACCESS-Cloud-Based-InSAR/dem-stitcher#dems-supported """
     fill_in_glo_30: bool = True
+    """ passed through to `dem_stitcher.stitch_dem`'s `fill_in_glo_30` argument """
     dst_resolution: Optional[Union[float, tuple[float]]] = None
     """ see https://github.com/ACCESS-Cloud-Based-InSAR/dem-stitcher#dems-supported """
     tiles_cache_dir: Optional[Path] = None
@@ -418,6 +505,17 @@ class DEMStitcherSource(DEMSource):
     """
 
     def fetch_dem(self, bounds: Bounds) -> DEM:
+        """
+        Return a DEM covering `bounds`, fetched and stitched via `dem-stitcher`.
+
+        The geoid is removed so the returned heights are ellipsoidal.
+
+        Args:
+            bounds (4-tuple): tuple of floats lon_min, lat_min, lon_max, lat_max
+
+        Returns:
+            DEM: eos.dem.DEM instance.
+        """
         src_is_point = self.dem_name in dem_stitcher.stitcher.PIXEL_CENTER_DEMS
         prev_bounds: Optional[tuple[float, float, float, float]] = None
 
@@ -479,6 +577,17 @@ class DEMStitcherSource(DEMSource):
 
 
 def get_any_source() -> DEMSource:
+    """
+    Return a `DEMSource`, preferring `srtm4` then `dem-stitcher`, whichever
+    is installed.
+
+    Returns:
+        DEMSource: an `SRTM4Source` if `srtm4` is available, else a
+        `DEMStitcherSource` if `dem-stitcher` is available.
+
+    Raises:
+        RuntimeError: if neither `srtm4` nor `dem-stitcher` is installed.
+    """
     if has_srtm4:
         return SRTM4Source()
     if has_demstitcher:
@@ -491,6 +600,8 @@ def get_any_source() -> DEMSource:
 ### Personal class for DEM stored locally
 ### author: Arthur Hauck 22/01/2024
 class MyDEMSource(DEMSource):
+    """A `DEMSource` backed by a single, locally stored DEM raster file."""
+
     def __init__(
         self,
         path_to_dem: str,
@@ -580,7 +691,17 @@ class MyDEMSource(DEMSource):
         self._dem = DEM(array=dem, transform=transform)
 
     def fetch_dem(self, bounds: Bounds) -> DEM:
+        """
+        Return a subset of the locally stored DEM covering `bounds`.
+
+        Args:
+            bounds (4-tuple): tuple of floats lon_min, lat_min, lon_max, lat_max
+
+        Returns:
+            DEM: subset of the locally stored DEM, as a copy.
+        """
         return self._dem.subset(bounds, copy=True)
 
     def get_extent(self):
+        """Return the (lon_min, lat_min, lon_max, lat_max) extent of the DEM."""
         return self._dem.get_extent()

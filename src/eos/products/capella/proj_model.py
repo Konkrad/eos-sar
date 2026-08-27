@@ -20,6 +20,14 @@ from eos.sar.roi import Roi
 
 @dataclass(frozen=True)
 class CapellaSLCModel(SensorModel):
+    """SensorModel implementation for Capella SLC products.
+
+    Wraps a :class:`~eos.sar.model_helper.GenericSensorModelHelper` built
+    from the product's orbit and timing to implement the
+    projection/localization interface defined by
+    :class:`~eos.sar.model.SensorModel`.
+    """
+
     generic_model: GenericSensorModelHelper
     # for SensorModel:
     w: int
@@ -35,6 +43,29 @@ class CapellaSLCModel(SensorModel):
         max_iterations: int = 20,
         tolerance: float = 0.0001,
     ) -> CapellaSLCModel:
+        """Build a `CapellaSLCModel` from parsed product metadata and an orbit.
+
+        Parameters
+        ----------
+        meta : CapellaSLCMetadata
+            Parsed Capella SLC metadata.
+        orbit : Orbit
+            Orbit to use for the sensor model.
+        corrector : Corrector, optional
+            Coordinate corrector applied by the underlying generic sensor
+            model. Defaults to an identity `Corrector`.
+        max_iterations : int, optional
+            Maximum number of iterations for the underlying iterative
+            projection/localization. Defaults to 20.
+        tolerance : float, optional
+            Localization tolerance, in the same units as the orbit
+            positions (meters). Defaults to 0.0001.
+
+        Returns
+        -------
+        CapellaSLCModel
+            Sensor model ready for projection/localization.
+        """
         coordinate = coordinates.SLCCoordinate(
             first_row_time=meta.first_line_time_since_ref,
             first_col_time=(2.0 * meta.starting_range) / C,
@@ -75,10 +106,18 @@ class CapellaSLCModel(SensorModel):
 
     @override
     def to_azt_rng(self, row: ArrayLike, col: ArrayLike) -> tuple[Arrayf64, Arrayf64]:
+        """Convert row/col image coordinates to azimuth time/range.
+
+        Delegates to the underlying `GenericSensorModelHelper`.
+        """
         return self.generic_model.to_azt_rng(row, col)
 
     @override
     def to_row_col(self, azt: ArrayLike, rng: ArrayLike) -> tuple[Arrayf64, Arrayf64]:
+        """Convert azimuth time/range to row/col image coordinates.
+
+        Delegates to the underlying `GenericSensorModelHelper`.
+        """
         return self.generic_model.to_row_col(azt, rng)
 
     @override
@@ -92,6 +131,11 @@ class CapellaSLCModel(SensorModel):
         azt_init: Optional[ArrayLike] = None,
         as_azt_rng: bool = False,
     ) -> tuple[CoordArrayLike, CoordArrayLike, CoordArrayLike]:
+        """Project a 3D point into image coordinates.
+
+        See `eos.sar.model.SensorModel.projection`. Delegates to the
+        underlying `GenericSensorModelHelper`.
+        """
         return self.generic_model.projection(
             x, y, alt, crs, vert_crs, azt_init, as_azt_rng
         )
@@ -108,11 +152,32 @@ class CapellaSLCModel(SensorModel):
         y_init: Optional[ArrayLike] = None,
         z_init: Optional[ArrayLike] = None,
     ) -> tuple[CoordArrayLike, CoordArrayLike, CoordArrayLike]:
+        """Localize a point in the image at a certain altitude.
+
+        See `eos.sar.model.SensorModel.localization`. Delegates to the
+        underlying `GenericSensorModelHelper`.
+        """
         return self.generic_model.localization(
             row, col, alt, crs, vert_crs, x_init, y_init, z_init
         )
 
     def to_cropped_model(self, roi: Roi):
+        """Return an equivalent sensor model for a crop of the image at `roi`.
+
+        Builds a new `CapellaSLCModel` whose row/col coordinates are
+        relative to `roi`'s origin instead of the full image, re-deriving
+        the azimuth/range timing and an approximate centroid for the crop.
+
+        Parameters
+        ----------
+        roi : Roi
+            Region of interest, in the full image's row/col frame.
+
+        Returns
+        -------
+        CapellaSLCModel
+            Sensor model for the cropped image defined by `roi`.
+        """
         coordinate_prev = self.generic_model.coordinate
         assert isinstance(coordinate_prev, coordinates.SLCCoordinate)  # for mypy
 

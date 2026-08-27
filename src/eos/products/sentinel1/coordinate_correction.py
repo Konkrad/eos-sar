@@ -1,3 +1,5 @@
+"""Sentinel-1 geolocation coordinate corrections (bistatic, intra-pulse, ...)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -39,6 +41,7 @@ class IntraPulse(ImageCorrectionEstimator):
 
     @override
     def estimate(self, pt: GeoImagePoints) -> ImageCorrection:
+        """Estimate the intra-pulse range shift `drng` at the given points."""
         azt, rng = pt.get_azt_rng()
 
         _, _, f_geom, f = self.doppler.get_doppler_quantities(
@@ -67,6 +70,7 @@ class Bistatic(ImageCorrectionEstimator):
 
     @override
     def estimate(self, pt: GeoImagePoints) -> ImageCorrection:
+        """Estimate the simple bistatic azimuth-time shift `dazt` at the given points."""
         _, rng = pt.get_azt_rng()
 
         # Simple bistatic correction
@@ -81,6 +85,8 @@ class Bistatic(ImageCorrectionEstimator):
 
 @dataclass(frozen=True)
 class FullBistaticReference:
+    """IW2 metadata required as a reference by the full bistatic correction."""
+
     slant_range_time: float
     """Two way time to the first column in the sentinel1 raster of IW2."""
     samples_per_burst: int
@@ -90,6 +96,7 @@ class FullBistaticReference:
 
     @staticmethod
     def from_burst_metadata(burst: Sentinel1BurstMetadata) -> FullBistaticReference:
+        """Build a `FullBistaticReference` from an IW2 burst's metadata."""
         return FullBistaticReference(
             slant_range_time=burst.slant_range_time,
             samples_per_burst=burst.samples_per_burst,
@@ -97,11 +104,13 @@ class FullBistaticReference:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the reference metadata as a plain dict of its fields."""
         d = self.__dict__.copy()
         return d
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> FullBistaticReference:
+        """Build a `FullBistaticReference` from a dict of its fields."""
         d = d.copy()
         return FullBistaticReference(**d)
 
@@ -126,6 +135,7 @@ class FullBistatic(ImageCorrectionEstimator):
 
     @override
     def estimate(self, pt: GeoImagePoints) -> ImageCorrection:
+        """Estimate the full bistatic azimuth-time shift `dazt` at the given points."""
         _, rng = pt.get_azt_rng()
 
         # Full bistatic correction
@@ -204,6 +214,7 @@ class AltFmMismatch(ImageCorrectionEstimator):
 
     @override
     def estimate(self, pt: GeoImagePoints) -> ImageCorrection:
+        """Estimate the azimuth-time shift `dazt` due to the IPF altitude/FM-rate mismatch."""
         azt, rng = pt.get_azt_rng()
         gx, gy, gz = pt.get_geo()
 

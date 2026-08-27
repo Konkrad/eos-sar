@@ -1,3 +1,5 @@
+"""Metadata parsing and sensor model for COSMO-SkyMed (CSK/CSG) products."""
+
 from __future__ import annotations
 
 import datetime
@@ -21,6 +23,11 @@ from eos.sar.roi import Roi
 
 @dataclass(frozen=True)
 class CosmoSkyMedMetadata:
+    """Metadata extracted from a COSMO-SkyMed (CSK/CSG) HDF5 product.
+
+    Instances are produced by :func:`parse_cosmoskymed_metadata`.
+    """
+
     mission_id: Literal["CSK", "CSG"]
     state_vectors: list[StateVector]
     orbit_direction: Literal["ascending", "descending"]
@@ -39,21 +46,54 @@ class CosmoSkyMedMetadata:
 
     @property
     def range_frequency(self) -> float:
+        """Range sampling frequency in Hz, derived from the range pixel spacing."""
         return LIGHT_SPEED_M_PER_SEC / (2.0 * self.range_pixel_spacing)
 
     @property
     def azimuth_time_interval(self) -> float:
+        """Azimuth time interval in seconds between two consecutive lines."""
         return 1.0 / self.azimuth_frequency
 
     @property
     def range_time_interval(self):
+        """Range time interval in seconds between two consecutive samples."""
         return 1.0 / self.range_sampling_rate
 
     def get_gdal_image_path(self, hdf5_path) -> str:
+        """Build the GDAL HDF5 subdataset path for the SLC image in ``hdf5_path``.
+
+        Parameters
+        ----------
+        hdf5_path : str
+            Path to the COSMO-SkyMed HDF5 product.
+
+        Returns
+        -------
+        str
+            GDAL ``HDF5:"..."://S01/<subdataset>`` path, using the "IMG"
+            subdataset for CSG products and "SBI" for CSK products.
+        """
         ipt = "IMG" if self.mission_id == "CSG" else "SBI"
         return f'HDF5:"{hdf5_path}"://S01/{ipt}'
 
     def deramping_phases(self, roi: Roi) -> NDArray[np.float32]:
+        """Compute the Doppler deramping phase correction over a region of interest.
+
+        Reproduces the deramping performed by SNAP's ``DemodulateOp``/
+        ``CosmoSkymedNetCDFReader``, using the Doppler centroid polynomial
+        evaluated at the range time of the middle of ``roi``.
+
+        Parameters
+        ----------
+        roi : Roi
+            Region of interest in the image for which to compute the phases.
+
+        Returns
+        -------
+        ndarray of float32
+            Deramping phase (radians) for each pixel of ``roi``, shape
+            ``(roi.h, roi.w)``.
+        """
         # from SNAP microwave-toolbox
         #   sar-io/src/main/java/eu/esa/sar/io/cosmo/CosmoSkymedNetCDFReader.java
         #   and sar-op-utilities/src/main/java/eu/esa/sar/utilities/gpf/DemodulateOp.java
@@ -92,6 +132,22 @@ def string_to_timestamp(s: str) -> float:
 
 
 def parse_cosmoskymed_metadata(hdf5_path: str) -> CosmoSkyMedMetadata:
+    """Parse a COSMO-SkyMed (CSK/CSG) HDF5 product into a :class:`CosmoSkyMedMetadata`.
+
+    Reads the HDF5 tags and the SLC/detected subdataset dimensions using
+    rasterio, and extracts state vectors, timing, geometry, and Doppler
+    centroid information.
+
+    Parameters
+    ----------
+    hdf5_path : str
+        Path to the COSMO-SkyMed HDF5 product.
+
+    Returns
+    -------
+    CosmoSkyMedMetadata
+        Parsed metadata for the product.
+    """
     with rasterio.open(hdf5_path, driver="HDF5") as f:
         d = f.tags()
 
@@ -180,6 +236,13 @@ def parse_cosmoskymed_metadata(hdf5_path: str) -> CosmoSkyMedMetadata:
 
 @dataclass(frozen=True)
 class CosmoSkyMedModel(SensorModel):
+    """SensorModel implementation for COSMO-SkyMed (CSK/CSG) products.
+
+    Wraps a :class:`~eos.sar.model_helper.GenericSensorModelHelper` built from
+    the product's orbit and timing to implement the projection/localization
+    interface defined by :class:`~eos.sar.model.SensorModel`.
+    """
+
     generic_model: GenericSensorModelHelper
     # for SensorModel:
     w: int
@@ -191,6 +254,24 @@ class CosmoSkyMedModel(SensorModel):
     def from_metadata(
         meta: CosmoSkyMedMetadata, orbit_degree: int, corrector: Corrector = Corrector()
     ) -> CosmoSkyMedModel:
+        """Build a :class:`CosmoSkyMedModel` from parsed product metadata.
+
+        Parameters
+        ----------
+        meta : CosmoSkyMedMetadata
+            Metadata parsed with :func:`parse_cosmoskymed_metadata`.
+        orbit_degree : int
+            Degree of the polynomial used to interpolate the orbit state
+            vectors.
+        corrector : Corrector, optional
+            Coordinate corrector applied by the underlying generic sensor
+            model. Defaults to an identity :class:`Corrector`.
+
+        Returns
+        -------
+        CosmoSkyMedModel
+            Sensor model ready for projection/localization.
+        """
         coordinate = coordinates.SLCCoordinate(
             first_row_time=meta.image_start,
             first_col_time=meta.slant_range_time,
@@ -225,10 +306,18 @@ class CosmoSkyMedModel(SensorModel):
 
     @override
     def to_azt_rng(self, row: ArrayLike, col: ArrayLike) -> tuple[Arrayf64, Arrayf64]:
+        """Convert row/col image coordinates to azimuth time/range.
+
+        Delegates to the underlying :class:`GenericSensorModelHelper`.
+        """
         return self.generic_model.to_azt_rng(row, col)
 
     @override
     def to_row_col(self, azt: ArrayLike, rng: ArrayLike) -> tuple[Arrayf64, Arrayf64]:
+        """Convert azimuth time/range to row/col image coordinates.
+
+        Delegates to the underlying :class:`GenericSensorModelHelper`.
+        """
         return self.generic_model.to_row_col(azt, rng)
 
     @override
@@ -242,6 +331,11 @@ class CosmoSkyMedModel(SensorModel):
         azt_init: Optional[ArrayLike] = None,
         as_azt_rng: bool = False,
     ) -> tuple[CoordArrayLike, CoordArrayLike, CoordArrayLike]:
+        """Project a 3D point into image coordinates.
+
+        See :meth:`eos.sar.model.SensorModel.projection`. Delegates to the
+        underlying :class:`GenericSensorModelHelper`.
+        """
         return self.generic_model.projection(
             x, y, alt, crs, vert_crs, azt_init, as_azt_rng
         )
@@ -258,6 +352,11 @@ class CosmoSkyMedModel(SensorModel):
         y_init: Optional[ArrayLike] = None,
         z_init: Optional[ArrayLike] = None,
     ) -> tuple[CoordArrayLike, CoordArrayLike, CoordArrayLike]:
+        """Localize a point in the image at a certain altitude.
+
+        See :meth:`eos.sar.model.SensorModel.localization`. Delegates to the
+        underlying :class:`GenericSensorModelHelper`.
+        """
         return self.generic_model.localization(
             row, col, alt, crs, vert_crs, x_init, y_init, z_init
         )

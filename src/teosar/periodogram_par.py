@@ -15,9 +15,29 @@ import tensorflow_probability as tfp  # noqa
 
 
 class PeriodogramTF:
+    """TensorFlow-based local refinement of the periodogram's coherence-maximizing parameters.
+
+    Given, for each PS, an initial guess (typically from an exhaustive
+    grid search such as `PeriodogramCL.find_maximum_on_grid`), refines it
+    with L-BFGS (via `tensorflow_probability`), batched and optionally
+    JIT-compiled.
+    """
+
     def __init__(
         self, num_constants_per_sum_term: int = 3, batch_size: int = 1024, ncpu: int = 1
     ):
+        """
+        Parameters
+        ----------
+        num_constants_per_sum_term : int, optional
+            Number of constants per summation term (1 bias + one per
+            variable). Defaults to 3 (i.e. 2 variables).
+        batch_size : int, optional
+            Number of PS optimized per compiled batch. Defaults to 1024.
+        ncpu : int, optional
+            `parallel_iterations` passed to the batched `tf.map_fn`
+            optimization. Defaults to 1.
+        """
         self.num_constants_per_sum_term = num_constants_per_sum_term
         self.num_variables_per_sum_term = num_constants_per_sum_term - 1
         self.batch_size = batch_size
@@ -167,6 +187,12 @@ class PeriodogramTF:
 
 @dataclass(frozen=True)
 class PeriodogramPar:
+    """Combines an OpenCL exhaustive grid search with a TensorFlow local refinement.
+
+    `find_maximum` first finds, per PS, the grid point maximizing coherence
+    with `periodo_cl`, then refines it with `periodo_tf`.
+    """
+
     periodo_cl: PeriodogramCL
     periodo_tf: PeriodogramTF
 

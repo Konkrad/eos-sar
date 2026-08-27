@@ -180,10 +180,12 @@ class Sentinel1BaseModel(model.SensorModel, abc.ABC):
 
     @override
     def to_azt_rng(self, row: ArrayLike, col: ArrayLike) -> tuple[Arrayf64, Arrayf64]:
+        """Convert row/col image coordinates to azimuth time and slant range."""
         return self._get_generic_model().to_azt_rng(row, col)
 
     @override
     def to_row_col(self, azt: ArrayLike, rng: ArrayLike) -> tuple[Arrayf64, Arrayf64]:
+        """Convert azimuth time and slant range to row/col image coordinates."""
         return self._get_generic_model().to_row_col(azt, rng)
 
     @override
@@ -197,6 +199,7 @@ class Sentinel1BaseModel(model.SensorModel, abc.ABC):
         azt_init: Optional[ArrayLike] = None,
         as_azt_rng: bool = False,
     ) -> tuple[CoordArrayLike, CoordArrayLike, CoordArrayLike]:
+        """Project a 3D point into the image coordinates. See `eos.sar.model.SensorModel.projection`."""
         return self._get_generic_model().projection(
             x,
             y,
@@ -219,6 +222,7 @@ class Sentinel1BaseModel(model.SensorModel, abc.ABC):
         y_init: Optional[ArrayLike] = None,
         z_init: Optional[ArrayLike] = None,
     ) -> tuple[CoordArrayLike, CoordArrayLike, CoordArrayLike]:
+        """Localize a point in the image at a certain altitude. See `eos.sar.model.SensorModel.localization`."""
         return self._get_generic_model().localization(
             row,
             col,
@@ -232,6 +236,12 @@ class Sentinel1BaseModel(model.SensorModel, abc.ABC):
 
 
 class Sentinel1SLCBaseModel(Sentinel1BaseModel):
+    """Base class for Sentinel-1 SLC sensor models built from an `SLCCoordinate`.
+
+    Subclasses (burst, swath, mosaic models) share this coordinate-mapping
+    and generic projection/localization implementation.
+    """
+
     def __init__(
         self,
         width,
@@ -274,7 +284,6 @@ class Sentinel1SLCBaseModel(Sentinel1BaseModel):
             For projection, the tolerance is considered on the satellite
             position of closest approach. Converted to azimuth time tolerance
             using the speed. The default is 0.001.
-        ...
         """
         azt_init = coordinate.to_azt(height / 2)
         super().__init__(
@@ -790,6 +799,7 @@ class Sentinel1MosaicModel(Sentinel1SLCBaseModel):
         )
 
     def to_dict(self) -> dict:
+        """Serialize this model to a plain, JSON-friendly dict."""
         metadata = dict(
             width=self.w,
             height=self.h,
@@ -805,6 +815,7 @@ class Sentinel1MosaicModel(Sentinel1SLCBaseModel):
 
     @staticmethod
     def from_dict(dict):
+        """Build a `Sentinel1MosaicModel` from a dict produced by `to_dict`."""
         # do a copy since it gets modified
         dict = dict.copy()
         dict["orbit"] = Orbit.from_dict(dict["orbit"])
@@ -812,6 +823,20 @@ class Sentinel1MosaicModel(Sentinel1SLCBaseModel):
         return Sentinel1MosaicModel(**dict)
 
     def to_cropped_mosaic(self, roi: roi.Roi):
+        """
+        Build a new `Sentinel1MosaicModel` restricted to a crop of this mosaic.
+
+        Parameters
+        ----------
+        roi : eos.sar.roi.Roi
+            Roi of the crop, referenced to this mosaic's origin.
+
+        Returns
+        -------
+        Sentinel1MosaicModel
+            Model for the cropped mosaic, with coordinates re-referenced to
+            the crop's origin.
+        """
         first_col_time = (
             self.coordinate.first_col_time + roi.col / self.coordinate.range_frequency
         )
@@ -1018,11 +1043,11 @@ def secondary_project_and_correct(
     Returns
     -------
     azt_no_correc : dict bsid -> array
-       Each element is an array of azimuth times without corrections.
+        Each element is an array of azimuth times without corrections.
     rng_no_correc : dict bsid -> array
-       Each element is an array of ranges without corrections.
+        Each element is an array of ranges without corrections.
     azt_correc : dict bsid -> array
-       Each element is an array of azimuth times with corrections.
+        Each element is an array of azimuth times with corrections.
     rng_correc : dict bsid -> array
         Each element is an array of ranges with corrections.
 

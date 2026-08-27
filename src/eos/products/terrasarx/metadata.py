@@ -12,6 +12,11 @@ from eos.sar.orbit import StateVector
 
 @dataclass(frozen=True)
 class TSXMetadata:
+    """Metadata extracted from a TerraSAR-X (TSX-1/TDX-1/PAZ-1) XML product.
+
+    Instances are produced by :func:`parse_tsx_metadata`.
+    """
+
     mission_id: Literal["TSX-1", "TDX-1", "PAZ-1"]
     state_vectors: list[StateVector]
     orbit_direction: Literal["ascending", "descending"]
@@ -29,17 +34,33 @@ class TSXMetadata:
 
     @property
     def azimuth_frequency(self) -> float:
+        """Azimuth line frequency in Hz, the inverse of `azimuth_time_interval`."""
         return 1.0 / self.azimuth_time_interval
 
     @property
     def range_frequency(self):
+        """Range sampling frequency in Hz, the inverse of `range_time_interval`."""
         return 1.0 / self.range_time_interval
 
     def to_dict(self) -> dict[str, Any]:
+        """Return this metadata as a plain (nested) dict, via `dataclasses.asdict`."""
         return asdict(self)
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> TSXMetadata:
+        """Build a `TSXMetadata` from a dict as produced by `to_dict`.
+
+        Parameters
+        ----------
+        d : dict
+            Dict with the same keys as `TSXMetadata`'s fields, with
+            `state_vectors` given as a list of dicts (see
+            `StateVector.from_dict`).
+
+        Returns
+        -------
+        TSXMetadata
+        """
         return TSXMetadata(
             mission_id=d["mission_id"],
             state_vectors=[

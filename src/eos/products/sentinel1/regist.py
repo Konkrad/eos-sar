@@ -1,3 +1,5 @@
+"""Estimate burst-by-burst coregistration matrices between two Sentinel-1 acquisitions."""
+
 import numpy as np
 
 import eos.sar
@@ -21,10 +23,11 @@ def get_burst_resampling_matrices(
 
     Parameters
     ----------
-    swath_model_no_correc : eos.products.sentinel1.proj_model.Sentinel1SwathModel
-        Swath model in ideal (primary img) coordinate system.
-    swath_model_correc : eos.products.sentinel1.proj_model.Sentinel1SwathModel
-        Swath model in imperfect coordinate system (primary or secondary img).
+    primary_cutter : eos.products.sentinel1.acquisition.Sentinel1AcquisitionCutter
+        Acquisition cutter for the ideal (primary img) coordinate system.
+    secondary_cutter : eos.products.sentinel1.acquisition.Sentinel1AcquisitionCutter
+        Acquisition cutter for the imperfect coordinate system (primary or
+        secondary img).
     azt_no_correc : dict bsid -> array
         Each element is an array of azimuth times without corrections.
     rng_no_correc : dict bsid -> array

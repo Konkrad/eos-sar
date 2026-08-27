@@ -30,6 +30,21 @@ def get_PS_candidates_DA(
 
 
 def get_local_min(array: NDArray) -> NDArray:
+    """
+    Compute, for each pixel, the minimum value in its 3x3 neighborhood (edges clamped).
+
+    Parameters
+    ----------
+    array : ndarray
+        2D (or higher, broadcast over the first two axes) input array.
+
+    Returns
+    -------
+    ndarray
+        Array of the same shape as `array`, with each pixel replaced by the
+        minimum of its 3x3 neighborhood (pixels outside the array bounds
+        are ignored, not treated as smaller).
+    """
     pos_list = [
         [-1, -1],
         [-1, 0],

@@ -19,6 +19,8 @@ ID: TypeAlias = int
 
 @dataclass(frozen=True)
 class Image:
+    """A SAR acquisition date used to build an interferometric pair network."""
+
     id: ID
     t: datetime.datetime
     perp_baseline: float
@@ -35,28 +37,36 @@ class Pair:
 
 @dataclass(frozen=True)
 class PairStats:
+    """Temporal and perpendicular baseline of a `Pair`."""
+
     time_baseline: datetime.timedelta
     perp_baseline: float
 
 
 @dataclass(frozen=True)
 class ConnectedComponent:
+    """A connected subset of images and pairs within a `PairSet`'s pair graph."""
+
     image_ids: frozenset[ID]
     pairs: frozenset[Pair]
 
 
 @dataclass(frozen=True)
 class PairSet:
+    """A set of interferometric pairs over a list of images."""
+
     pairs: set[Pair]
     images: list[Image]
 
     def filtered_pairs(self, pairs: set[Pair]) -> PairSet:
+        """Return a new `PairSet` with the same `images` but a different `pairs` set."""
         return PairSet(
             pairs=pairs,
             images=self.images,
         )
 
     def degree_of_image(self, im: Image) -> int:
+        """Return the number of pairs in this set that involve image `im`."""
         d = 0
         for p in self.pairs:
             if p.im1.id == im.id or p.im2.id == im.id:
@@ -64,6 +74,7 @@ class PairSet:
         return d
 
     def pair_stats(self, pair: Pair) -> PairStats:
+        """Compute the time and perpendicular baseline of `pair`."""
         im1 = pair.im1
         im2 = pair.im2
         baseline1 = im1.perp_baseline
@@ -73,6 +84,16 @@ class PairSet:
         )
 
     def connected_components(self) -> set[ConnectedComponent]:
+        """Compute the connected components of this set's pair graph.
+
+        Returns
+        -------
+        set[ConnectedComponent]
+            One `ConnectedComponent` per connected component of the graph
+            whose nodes are `self.images` and edges are `self.pairs`.
+            Images not involved in any pair form singleton components.
+        """
+
         def get_next_root(components: set[ConnectedComponent]) -> Optional[ID]:
             for im in self.images:
                 id = im.id
@@ -111,6 +132,29 @@ class PairSet:
 def prepare_info_from_directory_builder(
     dir_builder: inout.DirectoryBuilder,
 ) -> tuple[list[str], list[datetime.datetime], list[float]]:
+    """
+    Read processed dates and predict their mid-scene time/perpendicular baseline.
+
+    Reads the processing parameters and per-date sensor models saved by a
+    previous run (via `dir_builder`), and predicts each date's
+    perpendicular baseline (with respect to the first date) at the middle
+    of the ROI.
+
+    Parameters
+    ----------
+    dir_builder : inout.DirectoryBuilder
+        Builder pointing at a previously processed run's output directory.
+
+    Returns
+    -------
+    names : list[str]
+        Date identifiers, in processing order.
+    datetimes : list[datetime.datetime]
+        Mid-scene acquisition time for each date.
+    perp_baselines : list[float]
+        Predicted perpendicular baseline (meters) for each date, relative
+        to the first.
+    """
     proc_dict = inout.json_to_dict(dir_builder.get_proc_path())
     roi = Roi(*proc_dict["roi"])
     dates = [pid2date(p[0]) for p in proc_dict["product_ids"]]
@@ -139,6 +183,20 @@ def prepare_info_from_directory_builder(
 
 
 def predict_perp_baseline(models: list[SensorModel]) -> list[float]:
+    """
+    Predict the perpendicular baseline of each model relative to the first, at the scene center.
+
+    Parameters
+    ----------
+    models : list[SensorModel]
+        Sensor models, `models[0]` being the reference (primary).
+
+    Returns
+    -------
+    list[float]
+        Perpendicular baseline (meters) for each model, `0.0` for the
+        reference itself.
+    """
     ref = models[0]
     width = ref.w
     height = ref.h
@@ -158,6 +216,22 @@ def predict_perp_baseline(models: list[SensorModel]) -> list[float]:
 def compute_pairset(
     dates: list[datetime.datetime], perp_baselines: list[float]
 ) -> PairSet:
+    """
+    Build the `PairSet` of all possible pairs (the fully connected graph) over `dates`.
+
+    Parameters
+    ----------
+    dates : list[datetime.datetime]
+        Acquisition time of each image.
+    perp_baselines : list[float]
+        Perpendicular baseline of each image, same length as `dates`.
+
+    Returns
+    -------
+    PairSet
+        Set containing one `Image` per date and all `n*(n-1)/2` possible
+        pairs between them.
+    """
     assert len(dates) == len(perp_baselines)
 
     images = [
@@ -180,6 +254,16 @@ def compute_pairset(
 
 
 def plot_pairset(ax: Any, pairset: PairSet) -> None:
+    """
+    Plot a `PairSet`'s images (as points) and pairs (as edges) on a time/baseline axis.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axes to plot on (x: image time, y: perpendicular baseline).
+    pairset : PairSet
+        Pair set to plot.
+    """
     pairs = pairset.pairs
 
     def plot_point(im: Image, perp_baseline: float) -> None:
@@ -212,17 +296,28 @@ FilterResult: TypeAlias = tuple[Cost, Validity]
 
 @dataclass(frozen=True)
 class PairSetFilter(abc.ABC):
+    """A criterion used to score and validate a `PairSet` when building a pair network."""
+
     @abc.abstractmethod
-    def cost(self, pairset: PairSet) -> FilterResult: ...
+    def cost(self, pairset: PairSet) -> FilterResult:
+        """Return a `(cost, validity)` pair scoring `pairset` against this criterion.
+
+        A lower cost is preferred; `validity` is False if `pairset`
+        violates a hard constraint of this filter.
+        """
+        ...
 
 
 @dataclass(frozen=True)
 class TimePairSetFilter(PairSetFilter):
+    """`PairSetFilter` penalizing/rejecting pairs with a large temporal baseline."""
+
     threshold: datetime.timedelta
     weight: float
 
     @override
     def cost(self, pairset: PairSet) -> FilterResult:
+        """Sum the (weighted) temporal baseline of all pairs; invalid if any exceeds `threshold`."""
         c = 0.0
         valid = True
         for p in pairset.pairs:
@@ -236,11 +331,14 @@ class TimePairSetFilter(PairSetFilter):
 
 @dataclass(frozen=True)
 class PerpBaselinePairSetFilter(PairSetFilter):
+    """`PairSetFilter` penalizing/rejecting pairs with a large perpendicular baseline."""
+
     threshold: float
     weight: float
 
     @override
     def cost(self, pairset: PairSet) -> FilterResult:
+        """Sum the (weighted) perpendicular baseline of all pairs; invalid if any exceeds `threshold`."""
         c = 0.0
         valid = True
         for p in pairset.pairs:
@@ -254,10 +352,13 @@ class PerpBaselinePairSetFilter(PairSetFilter):
 
 @dataclass(frozen=True)
 class DegreePairSetFilter(PairSetFilter):
+    """`PairSetFilter` rejecting a `PairSet` where any image is involved in too many pairs."""
+
     threshold: int
 
     @override
     def cost(self, pairset: PairSet) -> FilterResult:
+        """Return `(0.0, False)` if any image's degree exceeds `threshold`, else `(0.0, True)`."""
         degrees = {im.id: 0 for im in pairset.images}
         for p in pairset.pairs:
             degrees[p.im1.id] += 1
@@ -271,16 +372,20 @@ class DegreePairSetFilter(PairSetFilter):
 
 @dataclass(frozen=True)
 class NumPairsPairSetFilter(PairSetFilter):
+    """`PairSetFilter` rejecting a `PairSet` with more than `threshold` total pairs."""
+
     threshold: int
 
     @override
     def cost(self, pairset: PairSet) -> FilterResult:
+        """Return `(0.0, False)` if `pairset` has more than `threshold` pairs, else `(0.0, True)`."""
         if len(pairset.pairs) > self.threshold:
             return 0.0, False
         return 0.0, True
 
 
 def eval_pairset(pairset: PairSet, filters: list[PairSetFilter]) -> FilterResult:
+    """Sum the costs and AND the validity of `pairset` across all `filters`."""
     c = 0.0
     valid = True
     for f in filters:
@@ -343,6 +448,27 @@ def make_connected(
 
 
 def filter_pairs(pairset: PairSet, filters: list[PairSetFilter]) -> PairSet:
+    """
+    Greedily select a low-cost, valid subset of `pairset`'s pairs against `filters`.
+
+    First discards pairs that are individually invalid against `filters`,
+    then greedily adds the remaining valid pairs one at a time, each time
+    picking the addition with the lowest total cost, until no valid
+    addition remains. This is a naive (greedy, not globally optimal)
+    selection.
+
+    Parameters
+    ----------
+    pairset : PairSet
+        Candidate pair set to filter.
+    filters : list[PairSetFilter]
+        Filters used to score and validate candidate subsets.
+
+    Returns
+    -------
+    PairSet
+        `pairset` restricted to the selected pairs.
+    """
     # remove pairs that are straight invalid
     all_valid_pairs = {
         p
@@ -375,6 +501,30 @@ def interesting_pairs_from_directory_builder(
     *,
     show_plot: bool = False,
 ) -> list[tuple[str, str]]:
+    """
+    Compute an interferometric pair network for a previously processed set of dates.
+
+    Reads the processed dates and their predicted baselines (via
+    `prepare_info_from_directory_builder`), builds the fully connected
+    pair graph, filters it down with `filters` (`filter_pairs`), then
+    ensures the result is connected by adding back bridging pairs
+    (`make_connected`).
+
+    Parameters
+    ----------
+    dir_builder : inout.DirectoryBuilder
+        Builder pointing at a previously processed run's output directory.
+    filters : list[PairSetFilter]
+        Filters used to select and validate pairs.
+    show_plot : bool, optional
+        If True, display a matplotlib plot of the resulting pair set.
+        Defaults to False.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        Selected pairs, as `(name1, name2)` date identifier tuples.
+    """
     names, datetimes, perp_baselines = prepare_info_from_directory_builder(dir_builder)
 
     pairset = compute_pairset(datetimes, perp_baselines)

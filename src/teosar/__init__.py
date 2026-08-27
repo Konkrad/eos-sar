@@ -1,3 +1,11 @@
+"""Persistent Scatterer Interferometry (PSI) and time-series InSAR tooling
+(e.g. Ferretti et al. 2001-style PSI), built on top of coregistered SAR
+crop stacks produced by ``teosar.tsinsar``.
+
+This part of the codebase is more research-oriented and not as heavily
+tested as ``eos``.
+"""
+
 from teosar import center_surround as center_surround
 from teosar import inout as inout
 from teosar import neighbors as neighbors

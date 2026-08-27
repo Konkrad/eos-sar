@@ -16,15 +16,18 @@ Polarization: TypeAlias = Literal["HH", "HV", "VH", "VV", "RH", "RV", "LH", "LV"
 
 
 class DatasetNotFoundError(Exception):
-    pass
+    """Raised when an expected dataset is missing from a NISAR HDF5 product."""
 
 
 def parse_date_as_numpy_datetime64(date_str: str) -> np.datetime64:
+    """Parse an ISO-8601 date string (optionally "Z"-suffixed) into a nanosecond `np.datetime64`."""
     return np.datetime64(date_str.removesuffix("Z"), "ns")
 
 
 @dataclass(frozen=True)
 class NisarMetadata:
+    """Common identification metadata shared by NISAR product metadata classes."""
+
     radar_band: Literal["L", "S"]
     mission_id: str
     product_id: str
@@ -49,6 +52,8 @@ class NisarMetadata:
 
 @dataclass(frozen=True)
 class NisarFrequencyMetadata:
+    """Per-frequency (A or B) swath and calibration metadata for a NISAR RSLC product."""
+
     slant_range_first: float
     slant_range_spacing: float
     ground_range_spacing: float
@@ -84,6 +89,22 @@ class NisarFrequencyMetadata:
     def parse_metadata(
         ds: h5py.File, frequency: Frequency, radar_band: Literal["L", "S"]
     ) -> NisarFrequencyMetadata:
+        """Parse the swath and calibration metadata for one frequency of a NISAR RSLC product.
+
+        Parameters
+        ----------
+        ds : h5py.File
+            Opened NISAR RSLC HDF5 product.
+        frequency : {"A", "B"}
+            Frequency band to parse.
+        radar_band : {"L", "S"}
+            Radar band group ("LSAR" or "SSAR") to read from.
+
+        Returns
+        -------
+        NisarFrequencyMetadata
+            Parsed swath and calibration metadata for the given frequency.
+        """
         # Swath
         frequency_group = f"science/{radar_band}SAR/RSLC/swaths/frequency{frequency}"
         slant_range_first = float(ds[f"{frequency_group}/slantRange"][0])
@@ -150,20 +171,39 @@ class NisarFrequencyMetadata:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """Return this metadata as a plain (JSON-serializable) dict.
+
+        `ref_timestamp` is converted to its string representation; use
+        `from_dict` to reverse this conversion.
+        """
         d = asdict(self)
         d["ref_timestamp"] = str(self.ref_timestamp)
         return d
 
     @property
     def range_frequency(self) -> float:
+        """Range sampling frequency in Hz, derived from `slant_range_spacing`."""
         return LIGHT_SPEED_M_PER_SEC / (2 * self.slant_range_spacing)
 
     @property
     def first_col_time(self) -> float:
+        """Two-way slant range time of the first column, in seconds."""
         return (2 * self.slant_range_first) / LIGHT_SPEED_M_PER_SEC
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> NisarFrequencyMetadata:
+        """Build a `NisarFrequencyMetadata` from a dict as produced by `to_dict`.
+
+        Parameters
+        ----------
+        d : dict
+            Dict with the same keys as `NisarFrequencyMetadata`'s fields,
+            with `ref_timestamp` given as a string.
+
+        Returns
+        -------
+        NisarFrequencyMetadata
+        """
         d = d.copy()
         d["ref_timestamp"] = np.datetime64(d["ref_timestamp"], "ns")
         return NisarFrequencyMetadata(**d)
@@ -171,6 +211,13 @@ class NisarFrequencyMetadata:
 
 @dataclass(frozen=True)
 class NisarRSLCMetadata(NisarMetadata):
+    """Metadata for a NISAR RSLC (Range Doppler Single Look Complex) product.
+
+    Extends `NisarMetadata` with orbit, geolocation grid, calibration
+    lookup tables, and per-frequency (`frequency_a`/`frequency_b`)
+    metadata. Instances are produced by `NisarRSLCMetadata.parse_metadata`.
+    """
+
     height: int
     azimuth_time_first: float
     azimuth_time_interval: float
@@ -199,6 +246,19 @@ class NisarRSLCMetadata(NisarMetadata):
 
     @staticmethod
     def parse_metadata(ds: h5py.File) -> NisarRSLCMetadata:
+        """Parse a NISAR RSLC HDF5 product into a `NisarRSLCMetadata`.
+
+        Parameters
+        ----------
+        ds : h5py.File
+            Opened NISAR RSLC HDF5 product.
+
+        Returns
+        -------
+        NisarRSLCMetadata
+            Parsed identification, orbit, geolocation, calibration, and
+            per-frequency metadata.
+        """
         radar_band = next(iter(ds["science"].keys()))[0]
 
         # Identification
@@ -367,6 +427,12 @@ class NisarRSLCMetadata(NisarMetadata):
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """Return this metadata as a plain (JSON-serializable) dict.
+
+        `state_vectors`, `frequency_a`, `frequency_b`, and `ref_timestamp`
+        are converted to their serializable representations; use
+        `from_dict` to reverse this conversion.
+        """
         d = asdict(self)
         d["state_vectors"] = [
             state_vector.to_dict() for state_vector in self.state_vectors
@@ -378,10 +444,23 @@ class NisarRSLCMetadata(NisarMetadata):
 
     @property
     def azimuth_frequency(self) -> float:
+        """Azimuth line frequency in Hz, the inverse of `azimuth_time_interval`."""
         return 1.0 / self.azimuth_time_interval
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> NisarRSLCMetadata:
+        """Build a `NisarRSLCMetadata` from a dict as produced by `to_dict`.
+
+        Parameters
+        ----------
+        d : dict
+            Dict with the same keys as `NisarRSLCMetadata`'s fields, as
+            produced by `to_dict`.
+
+        Returns
+        -------
+        NisarRSLCMetadata
+        """
         d = d.copy()
         d["state_vectors"] = [StateVector.from_dict(s) for s in d["state_vectors"]]
         d["frequency_a"] = NisarFrequencyMetadata.from_dict(d["frequency_a"])

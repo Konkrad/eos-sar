@@ -1,3 +1,10 @@
+"""Identify and resample burst overlap regions used for coregistration checks.
+
+Overlap regions between neighboring bursts (in azimuth) are identified by
+`Bsint` (a burst spatial intersection, a set of bsids) and `Osid` (the part
+of that intersection located within one specific burst).
+"""
+
 from eos.products.sentinel1 import burst_resamp
 from eos.sar import utils
 

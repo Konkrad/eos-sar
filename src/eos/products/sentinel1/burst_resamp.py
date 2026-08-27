@@ -62,6 +62,7 @@ class Sentinel1BurstResample(regist.SarResample):
     """
 
     def to_dict(self) -> dict:
+        """Serialize this resampler to a plain, JSON-friendly dict."""
         return dict(
             src_burst_roi=self.src_burst_roi.to_roi(),
             dst_burst_shape=self.dst_burst_shape,
@@ -78,6 +79,7 @@ class Sentinel1BurstResample(regist.SarResample):
 
     @staticmethod
     def from_dict(bresamp_dict):
+        """Build a `Sentinel1BurstResample` from a dict produced by `to_dict`."""
         return Sentinel1BurstResample(
             src_burst_roi=bresamp_dict["src_burst_roi"],
             dst_burst_shape=bresamp_dict["dst_burst_shape"],

@@ -1,3 +1,5 @@
+"""Catalog search for Sentinel-1 SLC and GRD products (e.g. via CDSE)."""
+
 import abc
 import datetime
 import logging
@@ -17,22 +19,35 @@ ProductPolarization = Literal["SV", "DV", "SH", "DH"]
 
 @dataclass(frozen=True)
 class Sentinel1CatalogQuery:
+    """Criteria describing the Sentinel-1 products to search for."""
+
     geometry: shapely.Geometry
     """Area of Interest, products should *intersect* with it."""
     start_date: datetime.datetime
+    """Earliest acquisition start date/time to consider."""
     end_date: datetime.datetime
+    """Latest acquisition start date/time to consider."""
     relative_orbit_number: int
+    """Relative orbit number products must be acquired on."""
     polarization: list[ProductPolarization]
+    """Accepted polarization channel combinations."""
 
 
 @dataclass(frozen=True)
 class Sentinel1CatalogResult:
+    """Result of a catalog search."""
+
     product_ids: list[str]
+    """All matching product ids."""
     product_ids_per_date: dict[str, list[str]]
+    """Matching product ids grouped by the date (YYYYMMDD) of the first
+    product of their datatake, keyed on that date."""
 
 
 @dataclass(frozen=True)
 class Sentinel1SLCCatalogBackend(abc.ABC):
+    """Base class for catalog backends returning Sentinel-1 IW SLC products."""
+
     @abc.abstractmethod
     def search(self, query: Sentinel1CatalogQuery) -> list[str]:
         """
@@ -42,6 +57,8 @@ class Sentinel1SLCCatalogBackend(abc.ABC):
 
 @dataclass(frozen=True)
 class Sentinel1GRDCatalogBackend(abc.ABC):
+    """Base class for catalog backends returning Sentinel-1 IW GRD products."""
+
     @abc.abstractmethod
     def search(self, query: Sentinel1CatalogQuery) -> list[str]:
         """
@@ -88,6 +105,23 @@ def search_slc(
     query: Sentinel1CatalogQuery,
     cache: eos.cache.Cache = eos.cache.no_cache(),
 ) -> Sentinel1CatalogResult:
+    """Search Sentinel-1 IW SLC products matching `query` via `backend`.
+
+    Parameters
+    ----------
+    backend : Sentinel1SLCCatalogBackend
+        Catalog backend to run the search against.
+    query : Sentinel1CatalogQuery
+        Search criteria.
+    cache : eos.cache.Cache, optional
+        Cache used to avoid repeating identical searches. The default is to
+        not cache.
+
+    Returns
+    -------
+    Sentinel1CatalogResult
+        Matching product ids, grouped by datatake date.
+    """
     return _search_from_backend(backend, query, cache)
 
 
@@ -96,6 +130,23 @@ def search_grd(
     query: Sentinel1CatalogQuery,
     cache: eos.cache.Cache = eos.cache.no_cache(),
 ) -> Sentinel1CatalogResult:
+    """Search Sentinel-1 IW GRD products matching `query` via `backend`.
+
+    Parameters
+    ----------
+    backend : Sentinel1GRDCatalogBackend
+        Catalog backend to run the search against.
+    query : Sentinel1CatalogQuery
+        Search criteria.
+    cache : eos.cache.Cache, optional
+        Cache used to avoid repeating identical searches. The default is to
+        not cache.
+
+    Returns
+    -------
+    Sentinel1CatalogResult
+        Matching product ids, grouped by datatake date.
+    """
     return _search_from_backend(backend, query, cache)
 
 
@@ -141,6 +192,20 @@ def query_to_request_str(
     query: Sentinel1CatalogQuery,
     product_type: Literal["IW_SLC__1S", "IW_GRDH_1S", "IW_GRDH_1S-COG"],
 ) -> str:
+    """Build a CDSE OData request URL for `query` restricted to `product_type`.
+
+    Parameters
+    ----------
+    query : Sentinel1CatalogQuery
+        Search criteria.
+    product_type : {"IW_SLC__1S", "IW_GRDH_1S", "IW_GRDH_1S-COG"}
+        CDSE product type to filter on.
+
+    Returns
+    -------
+    str
+        Full CDSE OData Products request URL.
+    """
     # TODO: we might want to look at neighbouring orbits
     # because of its loose definition around the equator
     # It can be achieved with an or statement similarly to polarizations
@@ -161,7 +226,21 @@ def query_to_request_str(
 
 @dataclass(frozen=True)
 class CDSESentinel1SLCCatalogBackend(Sentinel1SLCCatalogBackend):
+    """Sentinel-1 IW SLC catalog backend querying CDSE's OData API."""
+
     def get_cdse_item(self, product_id: str) -> dict[str, Any]:
+        """Get the raw CDSE OData item (with attributes) for `product_id`.
+
+        Parameters
+        ----------
+        product_id : str
+            Sentinel-1 product id (without the ".SAFE" extension).
+
+        Returns
+        -------
+        dict
+            The CDSE OData item for the product.
+        """
         response = requests.get(
             f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Name%20eq%20%27{product_id}.SAFE%27&$expand=Attributes"
         ).json()
@@ -172,21 +251,36 @@ class CDSESentinel1SLCCatalogBackend(Sentinel1SLCCatalogBackend):
 
     @override
     def search(self, query: Sentinel1CatalogQuery) -> list[str]:
+        """Get the list of Sentinel-1 IW SLC product ids matching `query`, from CDSE."""
         request = query_to_request_str(query, "IW_SLC__1S")
         return _cdse_list_items(request)
 
 
 @dataclass(frozen=True)
 class CDSESentinel1GRDCatalogBackend(Sentinel1GRDCatalogBackend):
+    """Sentinel-1 IW GRD catalog backend querying CDSE's OData API."""
+
     use_cog_products: bool = False
     """
-    This parameter defines the behavior of the `search` method and switches 
-    between the 'IW_GRDH_1S' and the 'IW_GRDH_1S-COG' collection. 
-    The `get_cdse_item` method would still work for a non COG product ID 
-    and vice-versa regardless of the value of this flag. 
+    This parameter defines the behavior of the `search` method and switches
+    between the 'IW_GRDH_1S' and the 'IW_GRDH_1S-COG' collection.
+    The `get_cdse_item` method would still work for a non COG product ID
+    and vice-versa regardless of the value of this flag.
     """
 
     def get_cdse_item(self, product_id: str) -> dict[str, Any]:
+        """Get the raw CDSE OData item (with attributes) for `product_id`.
+
+        Parameters
+        ----------
+        product_id : str
+            Sentinel-1 product id (without the ".SAFE" extension).
+
+        Returns
+        -------
+        dict
+            The CDSE OData item for the product.
+        """
         response = requests.get(
             f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Name%20eq%20%27{product_id}.SAFE%27&$expand=Attributes"
         ).json()
@@ -197,6 +291,7 @@ class CDSESentinel1GRDCatalogBackend(Sentinel1GRDCatalogBackend):
 
     @override
     def search(self, query: Sentinel1CatalogQuery) -> list[str]:
+        """Get the list of Sentinel-1 IW GRD product ids matching `query`, from CDSE."""
         request = (
             query_to_request_str(query, "IW_GRDH_1S-COG")
             if self.use_cog_products

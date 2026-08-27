@@ -93,6 +93,14 @@ def DIVUP(a, b):
 
 
 class PeriodogramCL:
+    """OpenCL-accelerated exhaustive grid search for the periodogram coherence function.
+
+    Compiles and runs the `compute_periodograms` OpenCL kernel (from the
+    packaged `periodogram.cl` source) to find, for each PS and in
+    parallel, the tested parameter combination maximizing the periodogram
+    coherence (see `find_maximum_on_grid`).
+    """
+
     def __init__(
         self,
         ctx: cl.Context = None,
@@ -102,6 +110,27 @@ class PeriodogramCL:
         enable_profile: bool = False,
         num_constants_per_sum_term: int = 3,
     ):
+        """
+        Parameters
+        ----------
+        ctx : pyopencl.Context, optional
+            OpenCL context to use. If None (default), one is created (the
+            first available device, or interactively selected).
+        queue : pyopencl.CommandQueue, optional
+            OpenCL command queue to use. If None (default), one is created
+            for `ctx`.
+        use_double_precision : bool, optional
+            Whether to use float64 instead of float32. Defaults to False.
+        interactive_device_selection : bool, optional
+            If True and `ctx` is None, let the user pick the OpenCL device
+            interactively. Defaults to False.
+        enable_profile : bool, optional
+            If True, enable OpenCL event profiling and print device/timing
+            information. Defaults to False.
+        num_constants_per_sum_term : int, optional
+            Number of constants per summation term (1 bias + one per
+            variable). Defaults to 3 (i.e. 2 variables).
+        """
         # Create an OpenCL context if None given
         if ctx is None:
             # If interactive is False, the first device available is selected
@@ -289,10 +318,13 @@ class PeriodogramCL:
 
 
 class WrongShape(ValueError):
+    """Raised when an array passed to `PeriodogramCL`/related helpers has an unexpected shape."""
+
     @staticmethod
     def from_msg(
         varname: str, expected_shape: str, var_shape: tuple[int, ...]
     ) -> WrongShape:
+        """Build a `WrongShape` describing the expected vs. actual shape of `varname`."""
         msg = f"Wrong shape for {varname}. Expected shape: {expected_shape}, got {var_shape}"
         return WrongShape(msg)
 
@@ -304,6 +336,33 @@ def create_constants(
     const_list: list[RealArray],
     dtype=np.float32,
 ) -> RealArray:
+    """
+    Assemble the `constants` array expected by `PeriodogramCL.find_maximum_on_grid`.
+
+    The first constant per sum term is the observed phase (`phi_ps_mat`);
+    the remaining ones are broadcast from `const_list`.
+
+    Parameters
+    ----------
+    num_ps : int
+        Number of persistent scatterers.
+    sum_size : int
+        Number of terms summed per periodogram evaluation (e.g. number of
+        dates/interferograms).
+    phi_ps_mat : RealArray
+        Observed (wrapped) phase, shape (num_ps, sum_size) or
+        (sum_size, num_ps).
+    const_list : list[RealArray]
+        Additional per-term constants (e.g. baselines, time deltas), each
+        broadcastable to (num_ps, sum_size).
+    dtype : optional
+        Output dtype. Defaults to `np.float32`.
+
+    Returns
+    -------
+    RealArray
+        Constants array of shape (num_ps, sum_size, len(const_list) + 1).
+    """
     constants = np.zeros([num_ps, sum_size, len(const_list) + 1], dtype=dtype)
 
     if phi_ps_mat.shape == (num_ps, sum_size):
@@ -328,6 +387,22 @@ def create_constants(
 
 
 def create_variables(test_vars_list: list[RealArray], dtype=np.float32) -> RealArray:
+    """
+    Build the `variables` grid expected by `PeriodogramCL.find_maximum_on_grid`.
+
+    Parameters
+    ----------
+    test_vars_list : list[RealArray]
+        Tested values for each variable.
+    dtype : optional
+        Output dtype. Defaults to `np.float32`.
+
+    Returns
+    -------
+    RealArray
+        All combinations of `test_vars_list`, as a 2D array of shape
+        (num_values_to_test, len(test_vars_list)).
+    """
     variables = np.stack(np.meshgrid(*test_vars_list), axis=-1, dtype=dtype)
     variables = np.reshape(variables, [-1, len(test_vars_list)])
     return variables
