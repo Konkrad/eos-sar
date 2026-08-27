@@ -6,6 +6,8 @@ authors = [
     { name = "individual collaborators" },
 ]
 version = "0.43.1"
+description = "Generic SAR (Synthetic Aperture Radar) processing algorithms"
+readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10,<3.14"
