@@ -6,7 +6,9 @@ correction, orthorectification, interferometry and related tools, together with 
 for several sensors' products.
 
 See the [project README](https://github.com/Konkrad/eos-sar#readme) for installation
-instructions, a usage example, and an overview of how the codebase is organized.
+instructions and a usage example, and
+[CONTRIBUTING.md](https://github.com/Konkrad/eos-sar/blob/master/CONTRIBUTING.md) for
+an overview of how the codebase is organized.
 
 ## Guides
 
