@@ -45,14 +45,20 @@ def test_meta_tifftags_vs_jsonfile():
 
 SLC_META_PATHS = [
     "s3://capella-open-data/data/2021/2/4/CAPELLA_C02_SS_SLC_HH_20210204153042_20210204153058/CAPELLA_C02_SS_SLC_HH_20210204153042_20210204153058_extended.json",
-    "s3://capella-open-data/data/2020/12/7/CAPELLA_C02_SM_SLC_HH_20201207083444_20201207083448/CAPELLA_C02_SM_SLC_HH_20201207083444_20201207083448_extended.json",
+    # The original CAPELLA_C02_SM_SLC_HH_20201207083444_20201207083448 product was
+    # removed from the capella-open-data bucket (the whole product directory 404s,
+    # not just this file). Vendored locally instead of pointing at another
+    # S3 object, to stop this test depending on a third-party bucket's
+    # contents remaining stable; see tests/data/capella/.
+    "./tests/data/capella/CAPELLA_C18_SM_SLC_HH_20260818222745_20260818222750_extended.json",
 ]
 
 SLC_SPOT_PATH = "s3://capella-open-data/data/2021/8/15/CAPELLA_C03_SP_SLC_HH_20210815144721_20210815144723/CAPELLA_C03_SP_SLC_HH_20210815144721_20210815144723_extended.json"
 
 GEC_META_PATHS = [
     "s3://capella-open-data/data/2021/2/4/CAPELLA_C02_SS_GEC_HH_20210204153042_20210204153058/CAPELLA_C02_SS_GEC_HH_20210204153042_20210204153058_extended.json",
-    "s3://capella-open-data/data/2020/12/7/CAPELLA_C02_SM_GEC_HH_20201207083444_20201207083448/CAPELLA_C02_SM_GEC_HH_20201207083444_20201207083448_extended.json",
+    # see the comment on SLC_META_PATHS above
+    "./tests/data/capella/CAPELLA_C18_SM_GEC_HH_20260818222745_20260818222750_extended.json",
 ]
 
 GEC_SPOT_PATH = "s3://capella-open-data/data/2021/8/15/CAPELLA_C03_SP_GEC_HH_20210815144712_20210815144733/CAPELLA_C03_SP_GEC_HH_20210815144712_20210815144733_extended.json"
