@@ -36,10 +36,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-14 = arm64 (Apple Silicon). Intel macOS (macos-13) wheels were
-        # dropped: GitHub's Intel Mac runner pool is small/slow, and pip falls
-        # back to building from the sdist on that platform if ever needed.
-        os: [ubuntu-latest, macos-14, windows-latest]
+        # macos-15 = arm64 (Apple Silicon). macos-14 failed with "The
+        # configuration 'macos-14-arm64-us-default' is not supported". Intel
+        # macOS (macos-13) wheels were dropped: GitHub's Intel Mac runner pool
+        # is small/slow, and pip falls back to building from the sdist on that
+        # platform if ever needed.
+        os: [ubuntu-latest, macos-15, windows-latest]
 
     steps:
       - uses: actions/checkout@v6
